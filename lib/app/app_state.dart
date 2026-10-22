@@ -67,7 +67,7 @@ class AppState extends ChangeNotifier {
         prefix: 'cam',
         videoKind: 3,
         viewPerm: Perm.cameraView,
-        directPerm: null);
+        directPerm: Perm.cameraDirect);
     identity =
         await Identity.loadOrCreate('$dataDir${Platform.pathSeparator}identity');
     session.identity = identity;
@@ -259,22 +259,27 @@ class AppState extends ChangeNotifier {
   // Asks the user to allow a peer to watch this screen, or (control) to also
   // control it. Unless the peer holds the matching ".direct" grant.
   Future<bool> _askScreenConsent(String dev, String name,
-      {bool control = false}) async {
+      {bool control = false, bool camera = false}) async {
     final context = navigatorKey.currentContext;
     if (context == null) return false;
+    final title = control
+        ? 'Let it control your device?'
+        : camera
+            ? 'Share your camera?'
+            : 'Share your screen?';
+    final body = control
+        ? '"$name" is asking to control this device — tap, swipe, scroll '
+            'and type — while it watches your screen.'
+        : camera
+            ? '"$name" is asking to watch this device\'s camera.'
+            : '"$name" is asking to watch this device\'s screen. While you '
+                'share, it sees everything on your screen.';
     final ok = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
-        title: Text(control ? 'Let it control your device?' : 'Share your screen?'),
-        content: Text(
-          control
-              ? '"$name" is asking to control this device — tap, swipe, scroll '
-                  'and type — while it watches your screen.'
-              : '"$name" is asking to watch this device\'s screen. While you '
-                  'share, it sees everything on your screen.',
-          style: const TextStyle(color: UcColors.text),
-        ),
+        title: Text(title),
+        content: Text(body, style: const TextStyle(color: UcColors.text)),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -282,7 +287,7 @@ class AppState extends ChangeNotifier {
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: Text(control ? 'Allow control' : 'Share'),
+            child: const Text('Allow'),
           ),
         ],
       ),

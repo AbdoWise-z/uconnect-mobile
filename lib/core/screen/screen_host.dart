@@ -20,7 +20,7 @@ enum HostState { idle, sharing }
 /// Asks the user to allow a peer to view this screen (or, with `control: true`,
 /// to also control it). Return true to allow.
 typedef ConsentAsk = Future<bool> Function(String dev, String name,
-    {bool control});
+    {bool control, bool camera});
 
 class ScreenHost {
   ScreenHost(this.session, this.capture, this.input,
@@ -188,7 +188,8 @@ class ScreenHost {
     // no direct grant (directPerm is null), so it always asks.
     if (directPerm == null || !perms.contains(directPerm!)) {
       session.sendControl(dev, {'t': '$prefix.wait', 'request': request});
-      final ok = await askConsent(dev, peer.displayName, control: false);
+      final ok = await askConsent(dev, peer.displayName,
+          control: false, camera: prefix == 'cam');
       if (!ok) return err('denied');
       if (state == HostState.sharing) return err('busy');
     }

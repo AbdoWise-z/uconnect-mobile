@@ -10,6 +10,7 @@ class Perm {
   static const storageWrite = 'storage.write';
   static const storageUpload = 'storage.upload';
   static const cameraView = 'camera.view';
+  static const cameraDirect = 'camera.direct';
   static const screenView = 'screen.view';
   static const screenDirect = 'screen.direct';
   static const controlInput = 'control.input';
@@ -66,6 +67,14 @@ const List<PermissionInfo> permissionTable = [
       service: 'camera',
       label: 'View',
       description: 'Watch this device\'s camera.',
+      available: true,
+      trustedOnly: true),
+  PermissionInfo(
+      id: Perm.cameraDirect,
+      service: 'camera',
+      label: 'Without asking',
+      description:
+          'View the camera without a consent prompt. Trusted devices only.',
       available: true,
       trustedOnly: true),
   PermissionInfo(
