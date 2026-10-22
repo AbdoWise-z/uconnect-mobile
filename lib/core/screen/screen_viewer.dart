@@ -300,13 +300,16 @@ class ScreenViewer {
     width = _int(msg, 'width', 0);
     height = _int(msg, 'height', 0);
     fps = _int(msg, 'fps', 30).clamp(1, 240);
-    monitors = _int(msg, 'monitors', 1);
-    monitor = _int(msg, 'monitor', 0);
+    // The host's source list, named (the protocol's monitor list). For a
+    // camera these are the cameras on offer; the viewer picks one.
+    final mons = msg['monitors'];
     cameras = [
-      if (msg['cameras'] is List)
-        for (final c in msg['cameras'] as List)
-          if (c is String) c
+      if (mons is List)
+        for (final m in mons)
+          if (m is Map && m['name'] is String) m['name'] as String
     ];
+    monitors = mons is List ? mons.length : _int(msg, 'monitors', 1);
+    monitor = _int(msg, 'monitor', 0);
     srcMaxWidth = _int(msg, 'maxWidth', 0);
     srcMaxFps = _int(msg, 'maxFps', 0);
     controlOffered = msg['control'] == true;

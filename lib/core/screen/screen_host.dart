@@ -249,11 +249,17 @@ class ScreenHost {
       'width': _width,
       'height': _height,
       'fps': _fps,
-      'monitors': sources.isEmpty ? 1 : sources.length,
+      // The sources on offer, named, as the protocol's monitor list (one entry
+      // "Screen" for a screen, the cameras for a camera) so the viewer can
+      // build a picker. The caps let it bound its own quality choices.
+      'monitors': sources.isEmpty
+          ? [
+              {'name': 'Screen', 'width': _width, 'height': _height}
+            ]
+          : [
+              for (final s in sources) {'name': s}
+            ],
       'monitor': _monitor,
-      // The cameras on offer and the caps, so the viewer can build a picker and
-      // bound its own quality choices.
-      if (sources.isNotEmpty) 'cameras': sources,
       'maxWidth': maxWidthCap > 0 ? maxWidthCap : _width,
       'maxFps': maxFpsCap > 0 ? maxFpsCap : _fps,
       'control': false,
