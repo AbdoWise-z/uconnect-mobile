@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 
 import '../core/identity.dart';
 import '../core/permissions.dart';
+import '../core/screen/remote_input.dart';
 import '../core/screen/screen_capture.dart';
 import '../core/screen/screen_host.dart';
 import '../core/session.dart';
@@ -33,6 +34,7 @@ class AppState extends ChangeNotifier {
   late final storageClient = StorageClient(session);
   late final storageOfferer = StorageOfferer(session);
   final capture = CaptureController();
+  final input = RemoteInput();
   late final ScreenHost screenHost;
 
   /// Set by the app shell so the screen-consent prompt has a context.
@@ -40,6 +42,8 @@ class AppState extends ChangeNotifier {
 
   bool loaded = false;
   String startError = '';
+  bool _controlAvailable = false;
+  bool get controlAvailable => _controlAvailable;
   final _subs = <StreamSubscription<void>>[];
   final _background = BackgroundKeepAlive();
 
@@ -48,7 +52,8 @@ class AppState extends ChangeNotifier {
 
   Future<void> init() async {
     await store.load();
-    screenHost = ScreenHost(session, capture, askConsent: _askScreenConsent);
+    screenHost =
+        ScreenHost(session, capture, input, askConsent: _askScreenConsent);
     identity =
         await Identity.loadOrCreate('$dataDir${Platform.pathSeparator}identity');
     session.identity = identity;
@@ -67,6 +72,7 @@ class AppState extends ChangeNotifier {
     }
     _applyLocalConfig();
     screenHost.offered = store.offerScreen;
+    _controlAvailable = await input.available();
     _subs.add(session.changed.listen((_) {
       _syncBackgroundService();
       notifyListeners();
@@ -84,7 +90,10 @@ class AppState extends ChangeNotifier {
   void _applyLocalConfig() {
     storageOfferer.offered = store.offerStorage;
     storageOfferer.shares = store.shares;
-    screenHost.offered = store.offerScreen && capture.supported;
+    final screenOn = store.offerScreen && capture.supported;
+    final controlOn = store.offerControl && _controlAvailable;
+    screenHost.offered = screenOn;
+    screenHost.offerControl = controlOn;
     session.setLocalHello(Hello(
       name: store.deviceName,
       os: Platform.isAndroid
@@ -94,7 +103,8 @@ class AppState extends ChangeNotifier {
               : Platform.operatingSystem,
       services: [
         if (store.offerStorage) Services.storage,
-        if (store.offerScreen && capture.supported) Services.screen,
+        if (screenOn) Services.screen,
+        if (controlOn) Services.control,
       ],
     ));
     session.setAccessPolicy(AccessPolicy(
@@ -176,6 +186,7 @@ class AppState extends ChangeNotifier {
     String? deviceName,
     bool? offerStorage,
     bool? offerScreen,
+    bool? offerControl,
     bool? forceRelay,
   }) async {
     if (server != null) store.server = server.trim();
@@ -185,24 +196,41 @@ class AppState extends ChangeNotifier {
     }
     if (offerStorage != null) store.offerStorage = offerStorage;
     if (offerScreen != null) store.offerScreen = offerScreen;
+    if (offerControl != null) store.offerControl = offerControl;
     if (forceRelay != null) store.forceRelay = forceRelay;
     await store.save();
     _applyLocalConfig();
     notifyListeners();
   }
 
-  // Asks the user to allow a peer to watch this screen (unless screen.direct).
-  Future<bool> _askScreenConsent(String dev, String name) async {
+  /// Re-checks whether the accessibility service is on (the user may have just
+  /// toggled it in Settings) and re-applies the hello so control is offered.
+  Future<void> refreshControlAvailability() async {
+    final was = _controlAvailable;
+    _controlAvailable = await input.available();
+    if (_controlAvailable != was) {
+      _applyLocalConfig();
+      notifyListeners();
+    }
+  }
+
+  // Asks the user to allow a peer to watch this screen, or (control) to also
+  // control it. Unless the peer holds the matching ".direct" grant.
+  Future<bool> _askScreenConsent(String dev, String name,
+      {bool control = false}) async {
     final context = navigatorKey.currentContext;
     if (context == null) return false;
     final ok = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
-        title: const Text('Share your screen?'),
+        title: Text(control ? 'Let it control your device?' : 'Share your screen?'),
         content: Text(
-          '"$name" is asking to watch this device\'s screen. While you share, '
-          'it sees everything on your screen.',
+          control
+              ? '"$name" is asking to control this device — tap, swipe, scroll '
+                  'and type — while it watches your screen.'
+              : '"$name" is asking to watch this device\'s screen. While you '
+                  'share, it sees everything on your screen.',
           style: const TextStyle(color: UcColors.text),
         ),
         actions: [
@@ -212,7 +240,7 @@ class AppState extends ChangeNotifier {
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Share'),
+            child: Text(control ? 'Allow control' : 'Share'),
           ),
         ],
       ),
@@ -258,6 +286,14 @@ class AppState extends ChangeNotifier {
     store.shares = shares;
     await store.save();
     _applyLocalConfig();
+  }
+
+  /// Tears the live connection down without disposing the notifier; called
+  /// when the OS is detaching the engine, so the native node does not linger.
+  void shutdown() {
+    unawaited(_background.stop());
+    unawaited(screenHost.stop());
+    unawaited(session.stop());
   }
 
   @override

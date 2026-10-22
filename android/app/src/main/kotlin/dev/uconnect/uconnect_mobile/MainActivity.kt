@@ -58,6 +58,62 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        // Remote control: a viewer's input, injected through the accessibility
+        // service (lib/core/screen/remote_input.dart).
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "uconnect/input")
+            .setMethodCallHandler { call, result ->
+                val svc = UconnectAccessibilityService.instance
+                when (call.method) {
+                    "available" -> result.success(UconnectAccessibilityService.isRunning())
+                    "openSettings" -> {
+                        startActivity(
+                            Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                        result.success(null)
+                    }
+                    "pointer" -> {
+                        val (w, h) = realScreenSize()
+                        svc?.pointer(
+                            (call.argument<Double>("x") ?: 0.0).toFloat() * w,
+                            (call.argument<Double>("y") ?: 0.0).toFloat() * h,
+                            call.argument<Boolean>("pressed") ?: false,
+                        )
+                        result.success(null)
+                    }
+                    "scroll" -> {
+                        val (w, h) = realScreenSize()
+                        svc?.scroll(
+                            (call.argument<Double>("x") ?: 0.0).toFloat() * w,
+                            (call.argument<Double>("y") ?: 0.0).toFloat() * h,
+                            call.argument<Int>("dx") ?: 0,
+                            call.argument<Int>("dy") ?: 0,
+                        )
+                        result.success(null)
+                    }
+                    "key" -> {
+                        svc?.key(call.argument<Int>("usage") ?: 0)
+                        result.success(null)
+                    }
+                    "text" -> {
+                        svc?.text(call.argument<String>("text") ?: "")
+                        result.success(null)
+                    }
+                    "release" -> {
+                        svc?.releaseInput()
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun realScreenSize(): Pair<Int, Int> {
+        val m = android.util.DisplayMetrics()
+        windowManager.defaultDisplay.getRealMetrics(m)
+        return Pair(m.widthPixels, m.heightPixels)
     }
 
     @Deprecated("deprecated base method; still the delivery path for the capture-consent result")

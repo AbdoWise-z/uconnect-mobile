@@ -76,7 +76,7 @@ class _ScreenViewState extends State<ScreenView> {
         title: Text('${widget.devName} — screen',
             style: const TextStyle(fontSize: 15)),
         actions: [
-          if (_viewer.active && _viewer.controlOffered)
+          if (_viewer.active && _canControl)
             IconButton(
               tooltip: _viewer.controlOn ? 'Stop controlling' : 'Take control',
               icon: Icon(_viewer.controlOn
@@ -209,7 +209,7 @@ class _ScreenViewState extends State<ScreenView> {
                   style: const TextStyle(color: Colors.white70, fontSize: 12)),
             ),
           ),
-        if (_viewer.active && _viewer.controlOffered && !_viewer.controlOn)
+        if (_viewer.active && _canControl && !_viewer.controlOn)
           Positioned(
             left: 12,
             right: 12,

@@ -79,16 +79,21 @@ class _SharingBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final name = state.screenHost.viewerName ?? 'a device';
+    final controlling = state.screenHost.controlling;
     return Material(
-      color: UcColors.accent,
+      color: controlling ? UcColors.error : UcColors.accent,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         child: Row(
           children: [
-            const Icon(Icons.screen_share, size: 18, color: Colors.white),
+            Icon(controlling ? Icons.touch_app : Icons.screen_share,
+                size: 18, color: Colors.white),
             const SizedBox(width: 10),
             Expanded(
-              child: Text('Sharing your screen to $name',
+              child: Text(
+                  controlling
+                      ? '$name is controlling this device'
+                      : 'Sharing your screen to $name',
                   style: const TextStyle(color: Colors.white, fontSize: 13)),
             ),
             TextButton(

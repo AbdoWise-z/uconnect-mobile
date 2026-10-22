@@ -12,15 +12,19 @@ import 'dart:typed_data';
 import '../permissions.dart';
 import '../session.dart';
 import '../../uconnect/uconnect.dart' show ucFallbackTcp, ucPathDirect;
+import 'remote_input.dart';
 import 'screen_capture.dart';
 
 enum HostState { idle, sharing }
 
-/// Asks the user to allow a peer to view this screen. Return true to allow.
-typedef ConsentAsk = Future<bool> Function(String dev, String name);
+/// Asks the user to allow a peer to view this screen (or, with `control: true`,
+/// to also control it). Return true to allow.
+typedef ConsentAsk = Future<bool> Function(String dev, String name,
+    {bool control});
 
 class ScreenHost {
-  ScreenHost(this.session, this.capture, {required this.askConsent}) {
+  ScreenHost(this.session, this.capture, this.input,
+      {required this.askConsent}) {
     session.addControlHandler(_onControl);
     session.addPeerStateHandler((dev, state) {
       if (dev == _viewer && (state == 4 || state == 5)) _teardown();
@@ -29,10 +33,17 @@ class ScreenHost {
 
   final Session session;
   final CaptureController capture;
+  final RemoteInput input;
   final ConsentAsk askConsent;
 
   /// Whether this device offers screen sharing at all; mirrors the hello.
   bool offered = false;
+
+  /// Whether this device offers remote control (needs the accessibility
+  /// service enabled); mirrors the `control` service in the hello.
+  bool offerControl = false;
+  bool _controlOn = false;
+  bool get controlling => _controlOn;
 
   HostState state = HostState.idle;
   String? _viewer; // the watching peer's dev id
@@ -74,15 +85,33 @@ class ScreenHost {
       case 'scr.report':
         if (_is(msg, 'session') && dev == _viewer) _onReport(msg);
       case 'scr.control':
-        // Control of this phone is not offered; acknowledge view-only.
         if (_is(msg, 'session') && dev == _viewer) {
-          session.sendControl(dev, {
-            't': 'scr.controlled',
-            'session': _session,
-            'request': msg['request'],
-            'on': false,
-            'detail': 'This device does not offer remote control.',
-          });
+          unawaited(_onControlRequest(dev, msg));
+        }
+      case 'in.mouse':
+        if (_controlOn && dev == _viewer && _is(msg, 'session')) {
+          final x = (msg['x'] is num ? (msg['x'] as num).toDouble() : 0.0);
+          final y = (msg['y'] is num ? (msg['y'] as num).toDouble() : 0.0);
+          final buttons = _intf(msg, 'buttons');
+          input.pointer(x, y, buttons != 0);
+        }
+      case 'in.wheel':
+        if (_controlOn && dev == _viewer && _is(msg, 'session')) {
+          input.scroll(0.5, 0.5, _intf(msg, 'dx'), _intf(msg, 'dy'));
+        }
+      case 'in.key':
+        if (_controlOn && dev == _viewer && _is(msg, 'session') &&
+            msg['down'] == true) {
+          input.key(_intf(msg, 'usage'));
+        }
+      case 'in.text':
+        if (_controlOn && dev == _viewer && _is(msg, 'session') &&
+            msg['text'] is String) {
+          input.text(msg['text'] as String);
+        }
+      case 'in.release':
+        if (_controlOn && dev == _viewer && _is(msg, 'session')) {
+          input.release();
         }
       case 'scr.stop':
         if (dev == _viewer &&
@@ -123,7 +152,7 @@ class ScreenHost {
     // Consent, unless the peer holds screen.direct.
     if (!perms.contains(Perm.screenDirect)) {
       session.sendControl(dev, {'t': 'scr.wait', 'request': request});
-      final ok = await askConsent(dev, peer.displayName);
+      final ok = await askConsent(dev, peer.displayName, control: false);
       if (!ok) return err('denied');
       if (state == HostState.sharing) return err('busy');
     }
@@ -157,6 +186,7 @@ class ScreenHost {
     _session = 1 + _rand.nextInt(0xFFFE); // nonzero u16
     _seq = 0;
     state = HostState.sharing;
+    _controlOn = false;
     _history.clear();
     _historyOrder.clear();
 
@@ -176,6 +206,11 @@ class ScreenHost {
       'cursorEmbedded': true,
     });
 
+    // An initial wantControl request is handled once sharing is up.
+    if (msg['wantControl'] == true) {
+      unawaited(_setControl(dev, request, true));
+    }
+
     _auSub = capture.accessUnits().listen(_onAccessUnit);
     // The encoder's very first keyframe can be dropped while the media channel
     // is still opening; force fresh ones over the first second so the viewer
@@ -187,6 +222,46 @@ class ScreenHost {
         }
       });
     }
+    _notify();
+  }
+
+  Future<void> _onControlRequest(String dev, Map<String, Object?> msg) =>
+      _setControl(dev, _intf(msg, 'request'), msg['on'] == true);
+
+  // Grants or drops remote control for the watching peer, with the same
+  // trust/permission/consent gate as screen viewing (7.5).
+  Future<void> _setControl(String dev, int request, bool on) async {
+    void answer(bool granted, [String? detail]) => session.sendControl(dev, {
+          't': 'scr.controlled',
+          'session': _session,
+          'request': request,
+          'on': granted,
+          if (detail != null) 'detail': detail,
+        });
+
+    if (!on) {
+      _controlOn = false;
+      input.release();
+      answer(false);
+      _notify();
+      return;
+    }
+    final perms = session.permissionsFor(dev);
+    if (!offerControl) return answer(false, 'This device does not offer remote control.');
+    if (!await input.available()) {
+      return answer(false, 'Remote control is not enabled on this device.');
+    }
+    if (!perms.contains(Perm.controlInput)) {
+      return answer(false, 'Not allowed to control this device.');
+    }
+    if (!perms.contains(Perm.controlDirect)) {
+      final name = session.peers[dev]?.displayName ?? 'A device';
+      final ok = await askConsent(dev, name, control: true);
+      if (!ok) return answer(false, 'The person at the device declined control.');
+      if (state != HostState.sharing || _viewer != dev) return;
+    }
+    _controlOn = true;
+    answer(true);
     _notify();
   }
 
@@ -309,6 +384,10 @@ class ScreenHost {
   Future<void> _teardownAsync() async {
     await _auSub?.cancel();
     _auSub = null;
+    if (_controlOn) {
+      input.release();
+      _controlOn = false;
+    }
     if (state == HostState.sharing) {
       await capture.stop();
     }

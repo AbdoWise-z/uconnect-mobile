@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_description">uConnect uses this to let a device you trust, and have granted remote control, move the pointer, scroll and type on this device while it watches your screen. It is only active during a control session you allow.</string>
+</resources>

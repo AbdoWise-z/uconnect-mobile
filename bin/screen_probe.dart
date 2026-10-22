@@ -52,6 +52,9 @@ Future<void> main(List<String> args) async {
     await session.dispose();
     exit(1);
   }
+  // Let both sides finish verifying each other's identity so the host's
+  // permission check (which keys off our proven identity) is in effect.
+  await Future<void>.delayed(const Duration(seconds: 3));
   stderr.writeln('requesting screen from $host');
 
   final viewer = ScreenViewer(session);
@@ -73,13 +76,31 @@ Future<void> main(List<String> args) async {
           '${viewer.error.isNotEmpty ? ' error=${viewer.error}' : ''}');
     }
   });
+  // Optional control test: UCONNECT_PROBE_TAP="x,y" (normalized 0..1) requests
+  // control and taps there once control is granted, to verify input injection.
+  final tap = Platform.environment['UCONNECT_PROBE_TAP'];
   viewer.request(host, wantControl: false, maxWidth: 1280, maxFps: 30);
 
-  // Report progress each second so we can see when frames start.
+  var tapped = false;
   for (var s = 0; s < seconds; s++) {
     await Future<void>.delayed(const Duration(seconds: 1));
     stderr.writeln('t=${s + 1}s state=${viewer.state} frames=$frames '
+        'control=${viewer.controlOn} '
         'path=${session.node?.datagramPath(session.topicId, host)}');
+    if (tap != null && viewer.state == ViewerState.active && !tapped) {
+      if (!viewer.controlOn) {
+        viewer.requestControl(true);
+      } else {
+        final parts = tap.split(',');
+        final nx = double.parse(parts[0]);
+        final ny = double.parse(parts[1]);
+        stderr.writeln('>>> tapping at ($nx,$ny)');
+        viewer.sendPointer(nx, ny, 1); // press
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        viewer.sendPointer(nx, ny, 0); // release
+        tapped = true;
+      }
+    }
   }
   viewer.stop();
   await out.flush();

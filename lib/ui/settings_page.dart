@@ -218,6 +218,38 @@ class _SettingsPageState extends State<SettingsPage> {
         value: state.store.offerScreen,
         onChanged: (on) => state.saveSettings(offerScreen: on),
       ),
+      SwitchListTile(
+        dense: true,
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Offer remote control', style: TextStyle(fontSize: 13)),
+        subtitle: const Text(
+            'Let a trusted device you grant it control this device while it '
+            'watches your screen. Needs the uConnect accessibility service on.',
+            style: TextStyle(fontSize: 11, color: UcColors.textSecondary)),
+        value: state.store.offerControl,
+        onChanged: (on) => state.saveSettings(offerControl: on),
+      ),
+      if (state.store.offerControl && !state.controlAvailable)
+        Padding(
+          padding: const EdgeInsets.only(top: 4, bottom: 4),
+          child: Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'The remote-control service is off. Turn on "uConnect remote '
+                  'control" under Accessibility to allow control.',
+                  style: TextStyle(fontSize: 11, color: UcColors.warning),
+                ),
+              ),
+              TextButton(
+                onPressed: () async {
+                  await state.input.openSettings();
+                },
+                child: const Text('Enable'),
+              ),
+            ],
+          ),
+        ),
       ListTile(
         contentPadding: EdgeInsets.zero,
         leading: const Icon(Icons.folder_outlined, color: UcColors.warning),
