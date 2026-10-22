@@ -27,6 +27,38 @@ class _Hid {
   static const up = 0x52;
 }
 
+/// A resolution/frame-rate the viewer can ask the host to encode at. The host
+/// scales and paces down to this, so a lower one keeps playback smooth when the
+/// phone's decoder cannot keep up with a full desktop. The user picks one from
+/// the screen view; the choice is remembered (AppStore.screenMaxWidth/Fps).
+class ScreenQuality {
+  const ScreenQuality(this.label, this.maxWidth, this.maxFps);
+  final String label;
+  final int maxWidth;
+  final int maxFps;
+
+  static const presets = <ScreenQuality>[
+    ScreenQuality('Full', 1920, 60),
+    ScreenQuality('High', 1600, 30),
+    ScreenQuality('Medium', 1280, 30),
+    ScreenQuality('Low', 960, 30),
+  ];
+
+  bool matches(int width, int fps) => width == maxWidth && fps == maxFps;
+
+  /// The preset for a stored choice, falling back to the closest by width.
+  static ScreenQuality forStore(int width, int fps) {
+    for (final q in presets) {
+      if (q.matches(width, fps)) return q;
+    }
+    var best = presets.first;
+    for (final q in presets) {
+      if ((q.maxWidth - width).abs() < (best.maxWidth - width).abs()) best = q;
+    }
+    return best;
+  }
+}
+
 class ScreenView extends StatefulWidget {
   const ScreenView({
     required this.state,
@@ -59,10 +91,13 @@ class _ScreenViewState extends State<ScreenView> {
   bool _keyboardOn = false;
   bool _fullscreen = false;
   String _typed = '';
+  late ScreenQuality _quality;
 
   @override
   void initState() {
     super.initState();
+    _quality = ScreenQuality.forStore(
+        widget.state.store.screenMaxWidth, widget.state.store.screenMaxFps);
     // Let the view rotate freely while open.
     SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.portraitUp,
@@ -89,7 +124,34 @@ class _ScreenViewState extends State<ScreenView> {
     _decoder.sizeChanged.listen((_) {
       if (mounted) setState(() {});
     });
-    _viewer.request(widget.devId, wantControl: widget.startControl);
+    _startView();
+  }
+
+  // Requests the stream at the quality the user has selected. Used on open and
+  // on "Try again" so a retry keeps the chosen quality instead of reverting.
+  void _startView() {
+    _viewer.request(widget.devId,
+        wantControl: widget.startControl,
+        maxWidth: _quality.maxWidth,
+        maxFps: _quality.maxFps);
+  }
+
+  // Re-requests the stream at a different resolution/frame rate. The host
+  // re-encodes at the new size, so rebuild the decoder for a clean start and
+  // keep control if we had it.
+  void _changeQuality(ScreenQuality q) {
+    if (q.matches(_quality.maxWidth, _quality.maxFps)) return;
+    final wasControlling = _canControl && _viewer.controlOn;
+    setState(() {
+      _quality = q;
+      _textureId = null;
+    });
+    widget.state
+        .saveSettings(screenMaxWidth: q.maxWidth, screenMaxFps: q.maxFps);
+    _viewer.request(widget.devId,
+        wantControl: wasControlling || widget.startControl,
+        maxWidth: q.maxWidth,
+        maxFps: q.maxFps);
   }
 
   @override
@@ -176,6 +238,7 @@ class _ScreenViewState extends State<ScreenView> {
 
   List<Widget> _appBarActions() {
     return [
+      if (_viewer.active) _qualityMenu(),
       if (_viewer.active)
         IconButton(
           tooltip: 'Full screen',
@@ -199,6 +262,35 @@ class _ScreenViewState extends State<ScreenView> {
     ];
   }
 
+  // Lets the user pick the stream quality. A lower one keeps motion smooth when
+  // the decoder cannot keep up; the pick is remembered across sessions.
+  Widget _qualityMenu({Color? color}) {
+    return PopupMenuButton<ScreenQuality>(
+      tooltip: 'Quality (${_quality.label})',
+      icon: Icon(Icons.high_quality_outlined, color: color),
+      onSelected: _changeQuality,
+      itemBuilder: (_) => [
+        for (final q in ScreenQuality.presets)
+          PopupMenuItem<ScreenQuality>(
+            value: q,
+            child: Row(
+              children: [
+                Icon(
+                  q.matches(_quality.maxWidth, _quality.maxFps)
+                      ? Icons.check
+                      : null,
+                  size: 18,
+                  color: UcColors.accent,
+                ),
+                const SizedBox(width: 8),
+                Text('${q.label}  ·  ${q.maxWidth}×${q.maxFps}fps'),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
   Widget _floatingControls() {
     return Container(
       margin: const EdgeInsets.all(8),
@@ -209,6 +301,7 @@ class _ScreenViewState extends State<ScreenView> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          _qualityMenu(color: Colors.white),
           if (_canControl)
             IconButton(
               tooltip: _viewer.controlOn ? 'Stop controlling' : 'Take control',
@@ -264,7 +357,7 @@ class _ScreenViewState extends State<ScreenView> {
               FilledButton(
                 onPressed: () {
                   setState(() => _textureId = null);
-                  _viewer.request(widget.devId);
+                  _startView();
                 },
                 child: const Text('Try again'),
               ),

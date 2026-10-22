@@ -188,6 +188,8 @@ class AppState extends ChangeNotifier {
     bool? offerScreen,
     bool? offerControl,
     bool? forceRelay,
+    int? screenMaxWidth,
+    int? screenMaxFps,
   }) async {
     if (server != null) store.server = server.trim();
     if (topicUri != null) store.topicUri = topicUri.trim();
@@ -198,6 +200,8 @@ class AppState extends ChangeNotifier {
     if (offerScreen != null) store.offerScreen = offerScreen;
     if (offerControl != null) store.offerControl = offerControl;
     if (forceRelay != null) store.forceRelay = forceRelay;
+    if (screenMaxWidth != null) store.screenMaxWidth = screenMaxWidth;
+    if (screenMaxFps != null) store.screenMaxFps = screenMaxFps;
     await store.save();
     _applyLocalConfig();
     notifyListeners();

@@ -48,6 +48,11 @@ class AppStore {
   bool offerScreen = false;
   bool offerControl = false;
   bool forceRelay = false;
+  // Quality to ask for when watching another device's screen. The default is
+  // full; the viewer lets the user pick a lower one when the phone's decoder
+  // cannot keep up (see ScreenQuality in ui/screen_view.dart).
+  int screenMaxWidth = 1920;
+  int screenMaxFps = 60;
   Set<String> defaultPermissions = {};
   final trusted = <String, TrustedDevice>{}; // key hex -> device
   List<SharedFolder> shares = [];
@@ -73,6 +78,10 @@ class AppStore {
     offerControl = decoded['offerControl'] == true;
     forceRelay =
         decoded['forceRelay'] is bool ? decoded['forceRelay'] as bool : false;
+    screenMaxWidth =
+        decoded['screenMaxWidth'] is int ? decoded['screenMaxWidth'] as int : 1920;
+    screenMaxFps =
+        decoded['screenMaxFps'] is int ? decoded['screenMaxFps'] as int : 60;
     defaultPermissions = {
       if (decoded['defaults'] is List)
         for (final p in decoded['defaults'] as List)
@@ -105,6 +114,8 @@ class AppStore {
       'offerScreen': offerScreen,
       'offerControl': offerControl,
       'forceRelay': forceRelay,
+      'screenMaxWidth': screenMaxWidth,
+      'screenMaxFps': screenMaxFps,
       'defaults': defaultPermissions.toList()..sort(),
       'trusted': [for (final t in trusted.values) t.toJson()],
       'shares': [
