@@ -43,21 +43,12 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  Widget _card(String title, List<Widget> children) => Card(
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title,
-                  style: const TextStyle(
-                      fontWeight: FontWeight.w600, color: UcColors.text)),
-              const SizedBox(height: 10),
-              ...children,
-            ],
-          ),
-        ),
-      );
+  Widget _card(String title, List<Widget> children,
+          {bool initiallyExpanded = true}) =>
+      _CollapsibleCard(
+          title: title,
+          initiallyExpanded: initiallyExpanded,
+          children: children);
 
   Widget _deviceCard(BuildContext context) {
     return _card('This device', [
@@ -528,4 +519,72 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<String?> _ask(BuildContext context, String title,
           {String initial = ''}) =>
       askText(context, title, initial: initial);
+}
+
+/// A settings card whose body can be collapsed by tapping its header, so the
+/// long settings list stays scannable.
+class _CollapsibleCard extends StatefulWidget {
+  const _CollapsibleCard({
+    required this.title,
+    required this.children,
+    this.initiallyExpanded = true,
+  });
+
+  final String title;
+  final List<Widget> children;
+  final bool initiallyExpanded;
+
+  @override
+  State<_CollapsibleCard> createState() => _CollapsibleCardState();
+}
+
+class _CollapsibleCardState extends State<_CollapsibleCard> {
+  late bool _expanded = widget.initiallyExpanded;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            InkWell(
+              onTap: () => setState(() => _expanded = !_expanded),
+              borderRadius: BorderRadius.circular(6),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(widget.title,
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w600, color: UcColors.text)),
+                    ),
+                    AnimatedRotation(
+                      turns: _expanded ? 0 : -0.25,
+                      duration: const Duration(milliseconds: 150),
+                      child: const Icon(Icons.expand_more,
+                          color: UcColors.textSecondary, size: 20),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            AnimatedCrossFade(
+              firstChild: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [const SizedBox(height: 10), ...widget.children],
+              ),
+              secondChild: const SizedBox(width: double.infinity),
+              crossFadeState: _expanded
+                  ? CrossFadeState.showFirst
+                  : CrossFadeState.showSecond,
+              duration: const Duration(milliseconds: 150),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
