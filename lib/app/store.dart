@@ -74,6 +74,12 @@ class AppStore {
   // cannot keep up (see ScreenQuality in ui/screen_view.dart).
   int screenMaxWidth = 1920;
   int screenMaxFps = 60;
+  // Camera source settings: which of this device's cameras to offer (empty =
+  // all), and the top resolution/frame rate to encode at (bounded further by
+  // what the physical camera supports). A viewer picks within these.
+  Set<String> cameraOffered = {};
+  int cameraMaxWidth = 1280;
+  int cameraMaxFps = 30;
   Set<String> defaultPermissions = {};
   final trusted = <String, TrustedDevice>{}; // key hex -> device
   List<SharedFolder> shares = [];
@@ -98,6 +104,15 @@ class AppStore {
     offerScreen = decoded['offerScreen'] == true;
     offerControl = decoded['offerControl'] == true;
     offerCamera = decoded['offerCamera'] == true;
+    cameraOffered = {
+      if (decoded['cameraOffered'] is List)
+        for (final c in decoded['cameraOffered'] as List)
+          if (c is String) c
+    };
+    cameraMaxWidth =
+        decoded['cameraMaxWidth'] is int ? decoded['cameraMaxWidth'] as int : 1280;
+    cameraMaxFps =
+        decoded['cameraMaxFps'] is int ? decoded['cameraMaxFps'] as int : 30;
     relayMode = decoded['relayMode'] is int
         ? (decoded['relayMode'] as int).clamp(RelayMode.auto, RelayMode.direct)
         : (decoded['forceRelay'] == true ? RelayMode.always : RelayMode.auto);
@@ -137,6 +152,9 @@ class AppStore {
       'offerScreen': offerScreen,
       'offerControl': offerControl,
       'offerCamera': offerCamera,
+      'cameraOffered': cameraOffered.toList()..sort(),
+      'cameraMaxWidth': cameraMaxWidth,
+      'cameraMaxFps': cameraMaxFps,
       'relayMode': relayMode,
       'screenMaxWidth': screenMaxWidth,
       'screenMaxFps': screenMaxFps,

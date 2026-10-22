@@ -16,6 +16,12 @@ class CameraInfo {
   final String facing; // 'front' | 'back' | 'external'
 }
 
+String _cameraLabel(String facing) => switch (facing) {
+      'front' => 'Front camera',
+      'back' => 'Back camera',
+      _ => 'External camera',
+    };
+
 class CameraCaptureController implements VideoSource {
   static const _channel = MethodChannel('uconnect/camera');
   static const _events = EventChannel('uconnect/camera/au');
@@ -24,8 +30,28 @@ class CameraCaptureController implements VideoSource {
   /// first back-facing one.
   String? cameraId;
 
+  /// Every camera on the device (loaded once by AppState), and the ids the user
+  /// chose to offer (empty = all). [offered] is the resulting list a viewer
+  /// sees and picks from.
+  List<CameraInfo> allCameras = const [];
+  Set<String> offeredIds = const {};
+
+  List<CameraInfo> get offered => offeredIds.isEmpty
+      ? allCameras
+      : [for (final c in allCameras) if (offeredIds.contains(c.id)) c];
+
   @override
   bool get supported => Platform.isAndroid;
+
+  @override
+  Future<List<String>> sources() async =>
+      [for (final c in offered) _cameraLabel(c.facing)];
+
+  @override
+  void selectSource(int index) {
+    final list = offered;
+    if (index >= 0 && index < list.length) cameraId = list[index].id;
+  }
 
   @override
   Stream<CaptureUnit> accessUnits() {

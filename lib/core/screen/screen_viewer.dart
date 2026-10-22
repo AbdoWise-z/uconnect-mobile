@@ -98,6 +98,9 @@ class ScreenViewer {
   int fps = 30;
   int monitors = 1;
   int monitor = 0;
+  List<String> cameras = const []; // camera names the host offers (cam only)
+  int srcMaxWidth = 0; // the source's quality caps, for bounding our request
+  int srcMaxFps = 0;
   bool controlOffered = false; // the session was started with control
   bool controlOn = false; // control is currently granted to us
   String controlDetail = '';
@@ -253,6 +256,8 @@ class ScreenViewer {
       case 'monitorChanged':
         if (_is(msg, 'session', _session) && msg['index'] is num) {
           monitor = (msg['index'] as num).toInt();
+          if (msg['width'] is num) width = (msg['width'] as num).toInt();
+          if (msg['height'] is num) height = (msg['height'] as num).toInt();
           _notify();
         }
       case 'pipeline':
@@ -296,6 +301,14 @@ class ScreenViewer {
     height = _int(msg, 'height', 0);
     fps = _int(msg, 'fps', 30).clamp(1, 240);
     monitors = _int(msg, 'monitors', 1);
+    monitor = _int(msg, 'monitor', 0);
+    cameras = [
+      if (msg['cameras'] is List)
+        for (final c in msg['cameras'] as List)
+          if (c is String) c
+    ];
+    srcMaxWidth = _int(msg, 'maxWidth', 0);
+    srcMaxFps = _int(msg, 'maxFps', 0);
     controlOffered = msg['control'] == true;
     controlOn = msg['control'] == true;
     controlDetail =
@@ -524,6 +537,14 @@ class ScreenViewer {
       'request': _request,
       'on': on,
     });
+  }
+
+  /// Switches which camera the host captures (cam.monitor); index into
+  /// [cameras].
+  void selectMonitor(int index) {
+    if (_session == 0 || index == monitor) return;
+    session.sendControl(
+        _dev!, {'t': _t('monitor'), 'session': _session, 'index': index});
   }
 
   /// Pointer position in normalized monitor coordinates (0..1), with the

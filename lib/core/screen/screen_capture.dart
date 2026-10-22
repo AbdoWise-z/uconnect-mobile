@@ -32,6 +32,15 @@ abstract class VideoSource {
   Future<void> requestKeyframe();
   Future<void> setBitrate(int bitrate);
   Future<void> stop();
+
+  /// Human-readable names of the sources on offer (e.g. the cameras). Empty for
+  /// a single-source capture like the screen; the host reports these so a
+  /// viewer can pick one.
+  Future<List<String>> sources() async => const [];
+
+  /// Selects which source (index into the last [sources]) the next [start] or
+  /// restart captures. A no-op for single-source captures.
+  void selectSource(int index) {}
 }
 
 class CaptureController implements VideoSource {
@@ -82,4 +91,10 @@ class CaptureController implements VideoSource {
       _channel.invokeMethod<void>('setBitrate', {'bitrate': bitrate});
 
   Future<void> stop() => _channel.invokeMethod<void>('stop');
+
+  // The screen is a single source.
+  @override
+  Future<List<String>> sources() async => const [];
+  @override
+  void selectSource(int index) {}
 }

@@ -245,6 +245,8 @@ class _ScreenViewState extends State<ScreenView> {
 
   List<Widget> _appBarActions() {
     return [
+      if (widget.camera && _viewer.active && _viewer.cameras.length > 1)
+        _cameraMenu(),
       if (_viewer.active) _qualityMenu(),
       if (_viewer.active)
         IconButton(
@@ -267,6 +269,30 @@ class _ScreenViewState extends State<ScreenView> {
           onPressed: _toggleKeyboard,
         ),
     ];
+  }
+
+  // Lets the viewer switch which of the host's cameras is being shown
+  // (cam.monitor). Only shown when the host offers more than one.
+  Widget _cameraMenu({Color? color}) {
+    return PopupMenuButton<int>(
+      tooltip: 'Camera',
+      icon: Icon(Icons.cameraswitch_outlined, color: color),
+      onSelected: _viewer.selectMonitor,
+      itemBuilder: (_) => [
+        for (var i = 0; i < _viewer.cameras.length; i++)
+          PopupMenuItem<int>(
+            value: i,
+            child: Row(
+              children: [
+                Icon(i == _viewer.monitor ? Icons.check : null,
+                    size: 18, color: UcColors.accent),
+                const SizedBox(width: 8),
+                Text(_viewer.cameras[i]),
+              ],
+            ),
+          ),
+      ],
+    );
   }
 
   // Lets the user pick the stream quality. A lower one keeps motion smooth when
@@ -308,6 +334,8 @@ class _ScreenViewState extends State<ScreenView> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (widget.camera && _viewer.cameras.length > 1)
+            _cameraMenu(color: Colors.white),
           _qualityMenu(color: Colors.white),
           if (_canControl)
             IconButton(

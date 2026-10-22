@@ -47,6 +47,9 @@ class AppState extends ChangeNotifier {
   String startError = '';
   bool _controlAvailable = false;
   bool get controlAvailable => _controlAvailable;
+
+  /// The device's cameras, for the camera-offer settings.
+  List<CameraInfo> get cameras => cameraCapture.allCameras;
   final _subs = <StreamSubscription<void>>[];
   final _background = BackgroundKeepAlive();
 
@@ -81,6 +84,14 @@ class AppState extends ChangeNotifier {
     if (store.shares.isEmpty) {
       store.shares = [SharedFolder('Shared', sharedDir)];
     }
+    // Enumerate the device's cameras once, for the offer settings and picker.
+    if (cameraCapture.supported) {
+      try {
+        cameraCapture.allCameras = await cameraCapture.cameras();
+      } on Object {
+        cameraCapture.allCameras = const [];
+      }
+    }
     _applyLocalConfig();
     screenHost.offered = store.offerScreen;
     cameraHost.offered = store.offerCamera && cameraCapture.supported;
@@ -109,6 +120,9 @@ class AppState extends ChangeNotifier {
     screenHost.offered = screenOn;
     screenHost.offerControl = controlOn;
     cameraHost.offered = cameraOn;
+    cameraCapture.offeredIds = store.cameraOffered;
+    cameraHost.maxWidthCap = store.cameraMaxWidth;
+    cameraHost.maxFpsCap = store.cameraMaxFps;
     session.setLocalHello(Hello(
       name: store.deviceName,
       os: Platform.isAndroid
@@ -204,6 +218,9 @@ class AppState extends ChangeNotifier {
     bool? offerScreen,
     bool? offerControl,
     bool? offerCamera,
+    Set<String>? cameraOffered,
+    int? cameraMaxWidth,
+    int? cameraMaxFps,
     int? relayMode,
     int? screenMaxWidth,
     int? screenMaxFps,
@@ -217,6 +234,9 @@ class AppState extends ChangeNotifier {
     if (offerScreen != null) store.offerScreen = offerScreen;
     if (offerControl != null) store.offerControl = offerControl;
     if (offerCamera != null) store.offerCamera = offerCamera;
+    if (cameraOffered != null) store.cameraOffered = cameraOffered;
+    if (cameraMaxWidth != null) store.cameraMaxWidth = cameraMaxWidth;
+    if (cameraMaxFps != null) store.cameraMaxFps = cameraMaxFps;
     if (relayMode != null) store.relayMode = relayMode;
     if (screenMaxWidth != null) store.screenMaxWidth = screenMaxWidth;
     if (screenMaxFps != null) store.screenMaxFps = screenMaxFps;

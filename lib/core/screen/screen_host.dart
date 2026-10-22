@@ -48,7 +48,14 @@ class ScreenHost {
   final String viewPerm;
   final String? directPerm;
 
+  /// Source-side caps on what to encode (0 = no cap): the camera settings bound
+  /// a viewer's request down to these.
+  int maxWidthCap = 0;
+  int maxFpsCap = 0;
+
   bool get _supportsControl => prefix == 'scr';
+  // The source (camera) currently being captured, index into capture.sources().
+  int _monitor = 0;
 
   /// Whether this device offers screen sharing at all; mirrors the hello.
   bool offered = false;
@@ -100,6 +107,10 @@ class ScreenHost {
           if (_is(msg, 'session') && dev == _viewer) _onNack(msg);
         case 'report':
           if (_is(msg, 'session') && dev == _viewer) _onReport(msg);
+        case 'monitor':
+          if (_is(msg, 'session') && dev == _viewer) {
+            unawaited(_switchMonitor(_intf(msg, 'index')));
+          }
         case 'control':
           if (_supportsControl && _is(msg, 'session') && dev == _viewer) {
             unawaited(_onControlRequest(dev, msg));
@@ -182,20 +193,31 @@ class ScreenHost {
       if (state == HostState.sharing) return err('busy');
     }
 
-    // The OS capture-consent dialog.
+    // The OS capture-consent dialog (or the camera runtime permission).
     final granted = await capture.requestConsent();
     if (!granted) return err('denied');
 
-    final maxWidth = _intf(msg, 'maxWidth');
-    final maxFps = _intf(msg, 'maxFps');
-    _fps = (maxFps > 0 ? maxFps : 30).clamp(15, 60);
+    // Honour the viewer's requested quality, bounded by the source's own caps.
+    var maxWidth = _intf(msg, 'maxWidth');
+    if (maxWidth <= 0) maxWidth = 1280;
+    if (maxWidthCap > 0) maxWidth = min(maxWidth, maxWidthCap);
+    var maxFps = _intf(msg, 'maxFps');
+    if (maxFps <= 0) maxFps = 30;
+    if (maxFpsCap > 0) maxFps = min(maxFps, maxFpsCap);
+    _fps = maxFps.clamp(1, 60);
     // Direct links get more; relay/TCP start lower (7.2).
     final path = session.node?.datagramPath(session.topicId, dev) ?? 0;
     _bitrate = path == ucPathDirect ? 4000000 : 1500000;
 
+    // The sources on offer (cameras); the viewer gets this list and may switch.
+    final sources = await capture.sources();
+    final wantMonitor = _intf(msg, 'monitor');
+    _monitor = (wantMonitor >= 0 && wantMonitor < sources.length) ? wantMonitor : 0;
+    if (sources.isNotEmpty) capture.selectSource(_monitor);
+
     final size = await capture.start(
-      width: maxWidth > 0 ? maxWidth : 1280,
-      height: (maxWidth > 0 ? maxWidth : 1280) * 2, // bound by width; host keeps aspect
+      width: maxWidth,
+      height: maxWidth * 2, // bound by width; the source keeps its own aspect
       fps: _fps,
       bitrate: _bitrate,
     );
@@ -227,7 +249,13 @@ class ScreenHost {
       'width': _width,
       'height': _height,
       'fps': _fps,
-      'monitors': 1,
+      'monitors': sources.isEmpty ? 1 : sources.length,
+      'monitor': _monitor,
+      // The cameras on offer and the caps, so the viewer can build a picker and
+      // bound its own quality choices.
+      if (sources.isNotEmpty) 'cameras': sources,
+      'maxWidth': maxWidthCap > 0 ? maxWidthCap : _width,
+      'maxFps': maxFpsCap > 0 ? maxFpsCap : _fps,
       'control': false,
       'cursorEmbedded': true,
     });
@@ -288,6 +316,44 @@ class ScreenHost {
     }
     _controlOn = true;
     answer(true);
+    _notify();
+  }
+
+  // Switches the camera being captured (cam.monitor) without ending the
+  // session: restart the capture on the chosen source and tell the viewer.
+  Future<void> _switchMonitor(int index) async {
+    final dev = _viewer;
+    if (dev == null || state != HostState.sharing) return;
+    final sources = await capture.sources();
+    if (index < 0 || index >= sources.length || index == _monitor) return;
+    _monitor = index;
+    capture.selectSource(index);
+    await _auSub?.cancel();
+    _auSub = null;
+    await capture.stop();
+    final size = await capture.start(
+      width: _width > 0 ? _width : 1280,
+      height: (_width > 0 ? _width : 1280) * 2,
+      fps: _fps,
+      bitrate: _bitrate,
+    );
+    if (size.width == 0 || _viewer != dev || state != HostState.sharing) {
+      await _teardownAsync();
+      return;
+    }
+    _width = size.width.toInt();
+    _height = size.height.toInt();
+    _auSub = capture.accessUnits().listen(_onAccessUnit);
+    session.sendControl(dev, {
+      't': '$prefix.monitorChanged',
+      'session': _session,
+      'index': _monitor,
+      'width': _width,
+      'height': _height,
+    });
+    Timer(const Duration(milliseconds: 300), () {
+      if (state == HostState.sharing && _viewer == dev) capture.requestKeyframe();
+    });
     _notify();
   }
 

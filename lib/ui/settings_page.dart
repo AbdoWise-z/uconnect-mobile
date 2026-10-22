@@ -218,6 +218,90 @@ class _SettingsPageState extends State<SettingsPage> {
     await state.connect();
   }
 
+  // The camera-source controls shown under "Offer camera": which of this
+  // device's cameras to offer, and the top resolution/frame rate to encode at.
+  List<Widget> _cameraSourceSettings() {
+    final cams = state.cameras;
+    String label(String f) => switch (f) {
+          'front' => 'Front camera',
+          'back' => 'Back camera',
+          _ => 'External camera',
+        };
+    bool isOffered(String id) =>
+        state.store.cameraOffered.isEmpty ||
+        state.store.cameraOffered.contains(id);
+    void toggle(String id, bool on) {
+      final all = {for (final c in cams) c.id};
+      final set = state.store.cameraOffered.isEmpty
+          ? {...all}
+          : {...state.store.cameraOffered};
+      if (on) {
+        set.add(id);
+      } else {
+        set.remove(id);
+      }
+      if (set.isEmpty) return; // always offer at least one
+      state.saveSettings(cameraOffered: set);
+    }
+
+    const widths = [1920, 1280, 960, 640];
+    const rates = [60, 30, 24, 15];
+    Widget drop(int value, List<int> options, String suffix, void Function(int) set) =>
+        DropdownButton<int>(
+          value: options.contains(value) ? value : options[1],
+          isDense: true,
+          style: const TextStyle(fontSize: 12, color: UcColors.text),
+          dropdownColor: UcColors.panel,
+          underline: const SizedBox.shrink(),
+          items: [
+            for (final o in options)
+              DropdownMenuItem(value: o, child: Text('$o$suffix'))
+          ],
+          onChanged: (v) {
+            if (v != null) set(v);
+          },
+        );
+
+    return [
+      const Padding(
+        padding: EdgeInsets.only(left: 16, top: 2),
+        child: Text('Cameras to offer',
+            style: TextStyle(fontSize: 11, color: UcColors.textSecondary)),
+      ),
+      if (cams.isEmpty)
+        const Padding(
+          padding: EdgeInsets.only(left: 16, top: 4, bottom: 4),
+          child: Text('No cameras found on this device.',
+              style: TextStyle(fontSize: 11, color: UcColors.textSecondary)),
+        ),
+      for (final c in cams)
+        Padding(
+          padding: const EdgeInsets.only(left: 8),
+          child: SwitchListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: Text(label(c.facing), style: const TextStyle(fontSize: 12)),
+            value: isOffered(c.id),
+            onChanged: (on) => toggle(c.id, on),
+          ),
+        ),
+      Padding(
+        padding: const EdgeInsets.only(left: 16, top: 4, bottom: 6),
+        child: Row(
+          children: [
+            const Text('Up to', style: TextStyle(fontSize: 12)),
+            const SizedBox(width: 10),
+            drop(state.store.cameraMaxWidth, widths, 'px',
+                (v) => state.saveSettings(cameraMaxWidth: v)),
+            const SizedBox(width: 14),
+            drop(state.store.cameraMaxFps, rates, ' fps',
+                (v) => state.saveSettings(cameraMaxFps: v)),
+          ],
+        ),
+      ),
+    ];
+  }
+
   Widget _storageCard(BuildContext context) {
     return _card('Storage', [
       SwitchListTile(
@@ -252,6 +336,7 @@ class _SettingsPageState extends State<SettingsPage> {
         value: state.store.offerCamera,
         onChanged: (on) => state.saveSettings(offerCamera: on),
       ),
+      if (state.store.offerCamera) ..._cameraSourceSettings(),
       SwitchListTile(
         dense: true,
         contentPadding: EdgeInsets.zero,
