@@ -36,6 +36,9 @@ class _SettingsPageState extends State<SettingsPage> {
         _deviceCard(context),
         _topicCard(context),
         _storageCard(context),
+        _cameraCard(context),
+        _screenCard(context),
+        _controlCard(context),
         _defaultsCard(context),
         _trustedCard(context),
         _aboutCard(context),
@@ -294,52 +297,73 @@ class _SettingsPageState extends State<SettingsPage> {
     ];
   }
 
+  // One switch + its description, used for each "offer <service>" toggle.
+  Widget _offerSwitch(String title, String subtitle, bool value,
+          ValueChanged<bool> onChanged) =>
+      SwitchListTile(
+        dense: true,
+        contentPadding: EdgeInsets.zero,
+        title: Text(title, style: const TextStyle(fontSize: 13)),
+        subtitle: Text(subtitle,
+            style: const TextStyle(fontSize: 11, color: UcColors.textSecondary)),
+        value: value,
+        onChanged: onChanged,
+      );
+
   Widget _storageCard(BuildContext context) {
     return _card('Storage', [
-      SwitchListTile(
-        dense: true,
+      _offerSwitch(
+          'Offer storage',
+          'Let devices you allow browse this device\'s shared folder.',
+          state.store.offerStorage,
+          (on) => state.saveSettings(offerStorage: on)),
+      ListTile(
         contentPadding: EdgeInsets.zero,
-        title: const Text('Offer storage', style: TextStyle(fontSize: 13)),
+        leading: const Icon(Icons.folder_outlined, color: UcColors.warning),
+        title: const Text('Shared folder', style: TextStyle(fontSize: 13)),
         subtitle: const Text(
-            'Let devices you allow browse this device\'s shared folder.',
-            style: TextStyle(fontSize: 11, color: UcColors.textSecondary)),
-        value: state.store.offerStorage,
-        onChanged: (on) => state.saveSettings(offerStorage: on),
+          'Files you add here are what other devices see.',
+          style: TextStyle(fontSize: 11, color: UcColors.textSecondary),
+        ),
+        trailing: TextButton(
+          onPressed: () => _addToShared(context),
+          child: const Text('Add files...'),
+        ),
       ),
-      SwitchListTile(
-        dense: true,
-        contentPadding: EdgeInsets.zero,
-        title: const Text('Offer screen sharing', style: TextStyle(fontSize: 13)),
-        subtitle: const Text(
-            'Let a trusted device you grant it watch this screen. Android asks '
-            'to confirm screen capture each time.',
-            style: TextStyle(fontSize: 11, color: UcColors.textSecondary)),
-        value: state.store.offerScreen,
-        onChanged: (on) => state.saveSettings(offerScreen: on),
-      ),
-      SwitchListTile(
-        dense: true,
-        contentPadding: EdgeInsets.zero,
-        title: const Text('Offer camera', style: TextStyle(fontSize: 13)),
-        subtitle: const Text(
-            'Let a trusted device you grant it watch this device\'s camera. '
-            'Asks for the camera permission, and to confirm each viewer.',
-            style: TextStyle(fontSize: 11, color: UcColors.textSecondary)),
-        value: state.store.offerCamera,
-        onChanged: (on) => state.saveSettings(offerCamera: on),
-      ),
+    ]);
+  }
+
+  Widget _cameraCard(BuildContext context) {
+    return _card('Camera', [
+      _offerSwitch(
+          'Offer camera',
+          'Let a trusted device you grant it watch this device\'s camera. '
+              'Asks for the camera permission, and to confirm each viewer.',
+          state.store.offerCamera,
+          (on) => state.saveSettings(offerCamera: on)),
       if (state.store.offerCamera) ..._cameraSourceSettings(),
-      SwitchListTile(
-        dense: true,
-        contentPadding: EdgeInsets.zero,
-        title: const Text('Offer remote control', style: TextStyle(fontSize: 13)),
-        subtitle: const Text(
-            'Let a trusted device you grant it control this device while it '
-            'watches your screen. Needs the uConnect accessibility service on.',
-            style: TextStyle(fontSize: 11, color: UcColors.textSecondary)),
-        value: state.store.offerControl,
-        onChanged: (on) => state.saveSettings(offerControl: on),
-      ),
+    ]);
+  }
+
+  Widget _screenCard(BuildContext context) {
+    return _card('Screen sharing', [
+      _offerSwitch(
+          'Offer screen sharing',
+          'Let a trusted device you grant it watch this screen. Android asks '
+              'to confirm screen capture each time.',
+          state.store.offerScreen,
+          (on) => state.saveSettings(offerScreen: on)),
+    ]);
+  }
+
+  Widget _controlCard(BuildContext context) {
+    return _card('Remote control', [
+      _offerSwitch(
+          'Offer remote control',
+          'Let a trusted device you grant it control this device while it '
+              'watches your screen. Needs the uConnect accessibility service on.',
+          state.store.offerControl,
+          (on) => state.saveSettings(offerControl: on)),
       if (state.store.offerControl && !state.controlAvailable)
         Padding(
           padding: const EdgeInsets.only(top: 4, bottom: 4),
@@ -361,19 +385,6 @@ class _SettingsPageState extends State<SettingsPage> {
             ],
           ),
         ),
-      ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: const Icon(Icons.folder_outlined, color: UcColors.warning),
-        title: const Text('Shared', style: TextStyle(fontSize: 13)),
-        subtitle: Text(
-          'Files you add here are what other devices see.',
-          style: const TextStyle(fontSize: 11, color: UcColors.textSecondary),
-        ),
-        trailing: TextButton(
-          onPressed: () => _addToShared(context),
-          child: const Text('Add files...'),
-        ),
-      ),
     ]);
   }
 

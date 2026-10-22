@@ -41,8 +41,13 @@ class ScreenDecoder {
   }
 
   /// Creates the texture and starts decoding [viewer]'s access units into it.
+  /// Safe to call again (e.g. after a quality change): the previous unit
+  /// subscription is cancelled first so units are never fed to the freshly
+  /// created decoder twice, which would corrupt it and ghost the picture.
   Future<int?> start(ScreenViewer viewer) async {
     if (!supported) return null;
+    await _sub?.cancel();
+    _sub = null;
     final created =
         await _channel.invokeMapMethod<String, Object?>('create');
     textureId = created?['textureId'] as int?;
