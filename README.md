@@ -34,6 +34,12 @@ unavailable.
 <p align="center">
   <img src="docs/images/connect-page.png" width="260"
        alt="The first-run page: rendezvous server, invite link, Connect">
+  <img src="docs/images/connected-to-desktop.png" width="260"
+       alt="The devices list, connected to a uConnect Desktop session on a laptop">
+</p>
+<p align="center">
+  <sub>Left: first run. Right: a phone connected to a uConnect Desktop session
+  on a laptop, over the relay, identity verified.</sub>
 </p>
 
 ## How it works
