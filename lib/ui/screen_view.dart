@@ -350,14 +350,21 @@ class _ScreenViewState extends State<ScreenView> {
     }
   }
 
+  // A single compact row so it fits even in landscape with the soft keyboard
+  // up (a taller, stacked bar overflowed the shrunken body there). The special
+  // keys scroll horizontally on the left; a narrow capture field on the right
+  // feeds typed characters to the host via _onTyped.
   Widget _keyboardBar() {
-    Widget key(String label, int usage, {double width = 48}) => Padding(
+    Widget key(String label, int usage) => Padding(
           padding: const EdgeInsets.symmetric(horizontal: 3),
           child: SizedBox(
-            width: width,
+            width: 44,
+            height: 38,
             child: OutlinedButton(
               style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 10),
+                padding: EdgeInsets.zero,
+                minimumSize: const Size(44, 38),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 foregroundColor: UcColors.text,
                 side: const BorderSide(color: UcColors.inputBorder),
               ),
@@ -368,41 +375,51 @@ class _ScreenViewState extends State<ScreenView> {
         );
     return Material(
       color: UcColors.panel,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-            child: Row(
-              children: [
-                key('Esc', _Hid.escape),
-                key('Tab', _Hid.tab),
-                key('⌫', _Hid.backspace),
-                key('↵', _Hid.enter),
-                key('←', _Hid.left),
-                key('→', _Hid.right),
-                key('↑', _Hid.up),
-                key('↓', _Hid.down),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-            child: TextField(
-              controller: _keyboard,
-              focusNode: _focusNode,
-              autocorrect: false,
-              enableSuggestions: false,
-              autofocus: true,
-              decoration: const InputDecoration(
-                isDense: true,
-                hintText: 'Type to send to the other device…',
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          child: Row(
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      key('Esc', _Hid.escape),
+                      key('Tab', _Hid.tab),
+                      key('⌫', _Hid.backspace),
+                      key('↵', _Hid.enter),
+                      key('←', _Hid.left),
+                      key('→', _Hid.right),
+                      key('↑', _Hid.up),
+                      key('↓', _Hid.down),
+                    ],
+                  ),
+                ),
               ),
-              onChanged: _onTyped,
-            ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 150,
+                child: TextField(
+                  controller: _keyboard,
+                  focusNode: _focusNode,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  autofocus: true,
+                  style: const TextStyle(fontSize: 14),
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    contentPadding:
+                        EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    hintText: 'Type…',
+                  ),
+                  onChanged: _onTyped,
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -431,6 +448,13 @@ class _ScreenViewState extends State<ScreenView> {
   // The Listener sits exactly on the letterboxed video (inside the
   // AspectRatio), so a touch maps straight to a normalized position regardless
   // of the zoom/pan transform applied by the InteractiveViewer around it.
+  //
+  // Only a single finger drives the pointer; a second finger means a
+  // pinch-zoom/pan, so control is released and the gesture is left to the
+  // InteractiveViewer -- otherwise both fingers would fling the cursor around.
+  final _pointers = <int>{};
+  int? _controlPointer;
+
   Widget _controlSurface(int textureId, double aspect) {
     return AspectRatio(
       aspectRatio: aspect,
@@ -438,18 +462,38 @@ class _ScreenViewState extends State<ScreenView> {
         final box = constraints.biggest;
         return Listener(
           onPointerDown: (e) {
-            _buttons = MouseButton.left;
-            _emit(e.localPosition, box);
+            _pointers.add(e.pointer);
+            if (_pointers.length == 1) {
+              _controlPointer = e.pointer;
+              _buttons = MouseButton.left;
+              _emit(e.localPosition, box);
+            } else if (_controlPointer != null) {
+              // A pinch began: release the held press and stop controlling.
+              _buttons = 0;
+              _emit(e.localPosition, box);
+              _controlPointer = null;
+            }
           },
-          onPointerMove: (e) => _emit(e.localPosition, box),
-          onPointerUp: (e) {
-            _buttons = 0;
-            _emit(e.localPosition, box);
+          onPointerMove: (e) {
+            if (e.pointer == _controlPointer && _pointers.length == 1) {
+              _emit(e.localPosition, box);
+            }
           },
+          onPointerUp: (e) => _endPointer(e.pointer, e.localPosition, box),
+          onPointerCancel: (e) => _endPointer(e.pointer, e.localPosition, box),
           child: Texture(textureId: textureId),
         );
       }),
     );
+  }
+
+  void _endPointer(int pointer, Offset pos, Size box) {
+    _pointers.remove(pointer);
+    if (pointer == _controlPointer) {
+      _buttons = 0;
+      _emit(pos, box);
+      _controlPointer = null;
+    }
   }
 
   void _emit(Offset pos, Size box) {
