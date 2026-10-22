@@ -40,6 +40,8 @@ android {
     externalNativeBuild {
         cmake {
             path = file("../../native/CMakeLists.txt")
+            // uconnect requires CMake 3.28+; the SDK's default is 3.22.
+            version = "3.31.4"
         }
     }
 

@@ -309,6 +309,7 @@ class UcNode {
   final StreamController<UcNodeEvent> _events;
   final Future<void> _pumpDone;
   bool _shutdown = false;
+  int _inflight = 0; // blocking calls running on other isolates
 
   Stream<UcNodeEvent> get events => _events.stream;
 
@@ -364,14 +365,31 @@ class UcNode {
     return UcNode._(node, controller, pumpDone.future);
   }
 
-  /// Shuts the node down, waits for the pump to drain, and frees it.
+  /// Shuts the node down, waits for the pump and any blocking call still
+  /// inside the library to return, and frees it. uconnect_node_free must not
+  /// run while another thread is inside a call on the node; shutdown wakes
+  /// them, so the waits below are short.
   Future<void> dispose() async {
     if (_shutdown) return;
     _shutdown = true;
     ucBindings.nodeShutdown(_node);
     await _pumpDone.timeout(const Duration(seconds: 10), onTimeout: () {});
+    final deadline = DateTime.now().add(const Duration(seconds: 10));
+    while (_inflight > 0 && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
     ucBindings.nodeFree(_node);
     await _events.close();
+  }
+
+  Future<T> _blocking<T>(Future<T> Function() run, T whenDown) async {
+    if (_shutdown) return whenDown;
+    _inflight++;
+    try {
+      return await run();
+    } finally {
+      _inflight--;
+    }
   }
 
   bool get isRunning => ucBindings.nodeIsRunning(_node);
@@ -460,7 +478,9 @@ class UcNode {
     final t = hexToBytes(topicHex)!;
     final addr = _node.address;
     final bytes = meta ?? Uint8List(0);
-    return Isolate.run(() => _publishBlocking((addr, t, bytes, unlisted)));
+    return _blocking(
+        () => Isolate.run(() => _publishBlocking((addr, t, bytes, unlisted))),
+        false);
   }
 
   void unpublish(String topicHex) {
@@ -488,8 +508,9 @@ class UcNode {
       int timeoutMs = ucDefaultTimeoutMs}) async {
     final t = hexToBytes(topicHex)!;
     final addr = _node.address;
-    final rows = await Isolate.run(
-        () => _peersBlocking((addr, t, max, wantMeta, timeoutMs)));
+    final rows = await _blocking(
+        () => Isolate.run(() => _peersBlocking((addr, t, max, wantMeta, timeoutMs))),
+        const <List<Object?>>[]);
     return [
       for (final r in rows)
         PeerListEntry(bytesToHex(r[0] as Uint8List), r[1] as int, r[2] as bool,
