@@ -268,6 +268,8 @@ class DeviceView extends StatelessWidget {
     final mayWatch = p.grantedToMe.contains(Perm.screenView);
     final offersControl = p.services.contains(Services.control);
     final mayControl = p.grantedToMe.contains(Perm.controlInput);
+    final offersCamera = p.services.contains(Services.camera);
+    final mayViewCamera = p.grantedToMe.contains(Perm.cameraView);
     return _card('On that device', [
       if (p.grantedToMe.isNotEmpty)
         _row('Granted to us', p.grantedToMe.join(', '))
@@ -302,6 +304,22 @@ class DeviceView extends StatelessWidget {
             icon: const Icon(Icons.screen_share_outlined, size: 18),
             label: const Text('Watch screen'),
           ),
+          if (offersCamera)
+            FilledButton.icon(
+              onPressed: p.stateCode == 3 && mayViewCamera
+                  ? () {
+                      Navigator.of(context).push(MaterialPageRoute<void>(
+                        builder: (_) => ScreenView(
+                            state: state,
+                            devId: p.devId,
+                            devName: p.displayName,
+                            camera: true),
+                      ));
+                    }
+                  : null,
+              icon: const Icon(Icons.videocam_outlined, size: 18),
+              label: const Text('Watch camera'),
+            ),
           if (offersControl && mayControl)
             FilledButton.icon(
               onPressed: p.stateCode == 3 && offersScreen && mayWatch

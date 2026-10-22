@@ -65,6 +65,7 @@ class ScreenView extends StatefulWidget {
     required this.devId,
     required this.devName,
     this.startControl = false,
+    this.camera = false,
     super.key,
   });
 
@@ -75,6 +76,10 @@ class ScreenView extends StatefulWidget {
   /// Open straight into controlling (take control as soon as it is available),
   /// rather than view-only.
   final bool startControl;
+
+  /// Watch the peer's camera (cam.* protocol) instead of its screen. A camera
+  /// stream has no control or keyboard channel.
+  final bool camera;
 
   @override
   State<ScreenView> createState() => _ScreenViewState();
@@ -104,7 +109,8 @@ class _ScreenViewState extends State<ScreenView> {
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
-    _viewer = ScreenViewer(widget.state.session);
+    _viewer = ScreenViewer(widget.state.session,
+        prefix: widget.camera ? 'cam' : 'scr');
     _decoder = ScreenDecoder();
     _viewer.changed.listen((_) async {
       if (!mounted) return;
@@ -172,6 +178,7 @@ class _ScreenViewState extends State<ScreenView> {
   }
 
   bool get _canControl {
+    if (widget.camera) return false; // a camera stream has no control channel
     final granted = widget.state.session.peers[widget.devId]?.grantedToMe ?? [];
     return granted.contains('control.input');
   }
@@ -223,7 +230,7 @@ class _ScreenViewState extends State<ScreenView> {
       backgroundColor: Colors.black,
       resizeToAvoidBottomInset: true,
       appBar: AppBar(
-        title: Text('${widget.devName} — screen',
+        title: Text('${widget.devName} — ${widget.camera ? 'camera' : 'screen'}',
             style: const TextStyle(fontSize: 15)),
         actions: _appBarActions(),
       ),
@@ -322,7 +329,8 @@ class _ScreenViewState extends State<ScreenView> {
   Widget _body() {
     switch (_viewer.state) {
       case ViewerState.requesting:
-        return _status('Asking ${widget.devName} to share its screen…');
+        return _status('Asking ${widget.devName} to share its '
+            '${widget.camera ? 'camera' : 'screen'}…');
       case ViewerState.waiting:
         return _status('Waiting for ${widget.devName} to allow it…');
       case ViewerState.failed:
