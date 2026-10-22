@@ -229,7 +229,12 @@ class CameraCapturer(
     private fun pickFpsRange(c: CameraCharacteristics, fps: Int): Range<Int> {
         val ranges = c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
             ?.toList().orEmpty()
-        return ranges.filter { it.upper <= fps }.maxByOrNull { it.upper }
+        // Among the ranges that reach the target fps, prefer the one with the
+        // highest lower bound so the camera holds that rate (e.g. [30,30] over
+        // [5,30]). Picking only by the upper bound could land on a variable
+        // range whose auto-exposure then drops to a handful of fps in dim light.
+        return ranges.filter { it.upper <= fps }
+            .maxWithOrNull(compareBy({ it.upper }, { it.lower }))
             ?: ranges.minByOrNull { it.upper } ?: Range(fps, fps)
     }
 
