@@ -93,6 +93,7 @@ class _ScreenViewState extends State<ScreenView> {
   final _keyboard = TextEditingController();
   final _transform = TransformationController();
   int _buttons = 0;
+  int _rotation = 0; // camera preview, quarter turns
   bool _keyboardOn = false;
   bool _fullscreen = false;
   String _typed = '';
@@ -248,6 +249,12 @@ class _ScreenViewState extends State<ScreenView> {
       if (widget.camera && _viewer.active && _viewer.cameras.length > 1)
         _cameraMenu(),
       if (_viewer.active) _qualityMenu(),
+      if (widget.camera && _viewer.active)
+        IconButton(
+          tooltip: 'Rotate',
+          icon: const Icon(Icons.screen_rotation),
+          onPressed: () => setState(() => _rotation = (_rotation + 1) % 4),
+        ),
       if (_viewer.active)
         IconButton(
           tooltip: 'Full screen',
@@ -337,6 +344,12 @@ class _ScreenViewState extends State<ScreenView> {
           if (widget.camera && _viewer.cameras.length > 1)
             _cameraMenu(color: Colors.white),
           _qualityMenu(color: Colors.white),
+          if (widget.camera)
+            IconButton(
+              tooltip: 'Rotate',
+              icon: const Icon(Icons.screen_rotation, color: Colors.white),
+              onPressed: () => setState(() => _rotation = (_rotation + 1) % 4),
+            ),
           if (_canControl)
             IconButton(
               tooltip: _viewer.controlOn ? 'Stop controlling' : 'Take control',
@@ -418,9 +431,13 @@ class _ScreenViewState extends State<ScreenView> {
     final aspect = (w > 0 && h > 0) ? w / h : 16 / 9;
     final controlling = _canControl && _viewer.controlOn;
 
-    final content = controlling
+    Widget content = controlling
         ? _controlSurface(id, aspect)
         : AspectRatio(aspectRatio: aspect, child: Texture(textureId: id));
+    // Quarter-turn the camera preview (sideways phone, etc.).
+    if (widget.camera && _rotation != 0) {
+      content = RotatedBox(quarterTurns: _rotation, child: content);
+    }
 
     // Pinch to zoom and pan. While controlling, a single finger drives the
     // pointer (panEnabled false) and two fingers still zoom/pan.
