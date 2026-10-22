@@ -79,11 +79,16 @@ powershell -File scripts/test.ps1         # unit + loopback E2E
 ```
 
 End to end on a connected Android device (everything runs over the USB cable
-via `adb reverse`):
+via `adb reverse`): the suite builds the app, installs it, and drives the real
+device through identity verification, listing, download, upload and file
+operations against a host peer.
 
 ```powershell
 powershell -File scripts/e2e-android.ps1
 ```
+
+This suite is green on a physical arm64 device against a Windows host peer; add
+Mac/iOS devices with `-DeviceId` once the iOS framework (below) is built.
 
 ## Platforms
 
