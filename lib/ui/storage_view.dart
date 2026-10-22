@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 
 import '../app/app_state.dart';
 import '../core/storage/storage_client.dart';
+import 'prompt_dialog.dart';
 import 'theme.dart';
 
 class StorageView extends StatefulWidget {
@@ -294,26 +295,8 @@ class _StorageViewState extends State<StorageView> {
     }
   }
 
-  Future<String?> _askName(String title, {String initial = ''}) async {
-    final controller = TextEditingController(text: initial);
-    final name = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(title),
-        content: TextField(controller: controller, autofocus: true),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(context, controller.text.trim()),
-              child: const Text('OK')),
-        ],
-      ),
-    );
-    controller.dispose();
-    return name;
-  }
+  Future<String?> _askName(String title, {String initial = ''}) =>
+      askText(context, title, initial: initial);
 
   Future<void> _newFolder() async {
     final name = await _askName('New folder');

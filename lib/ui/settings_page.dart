@@ -14,6 +14,7 @@ import '../app/store.dart';
 import '../core/identity.dart';
 import '../core/session.dart';
 import '../core/permissions.dart';
+import 'prompt_dialog.dart';
 import 'theme.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -525,24 +526,6 @@ class _SettingsPageState extends State<SettingsPage> {
       };
 
   Future<String?> _ask(BuildContext context, String title,
-      {String initial = ''}) async {
-    final controller = TextEditingController(text: initial);
-    final value = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(title, style: const TextStyle(fontSize: 15)),
-        content: TextField(controller: controller, autofocus: true),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(context, controller.text.trim()),
-              child: const Text('OK')),
-        ],
-      ),
-    );
-    controller.dispose();
-    return value;
-  }
+          {String initial = ''}) =>
+      askText(context, title, initial: initial);
 }
