@@ -11,6 +11,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../app/app_state.dart';
 import '../core/identity.dart';
+import '../core/session.dart';
 import '../core/permissions.dart';
 import 'theme.dart';
 

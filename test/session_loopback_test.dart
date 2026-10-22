@@ -8,7 +8,6 @@
 //   UCONNECT_RENDEZVOUS   the uconnect-rendezvous executable
 // Without them the suite skips rather than fails.
 
-import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 

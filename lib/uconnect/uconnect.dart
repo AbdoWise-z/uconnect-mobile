@@ -38,7 +38,12 @@ export 'bindings.dart'
         ucPathDirect,
         ucPathRelayed,
         ucPathTcp,
-        ucPathFailed;
+        ucPathFailed,
+        ucEventPeer,
+        ucEventData,
+        ucEventDatagram,
+        ucEventDatagramPath,
+        ucEventPeerClosed;
 
 UcBindings? _bindings;
 

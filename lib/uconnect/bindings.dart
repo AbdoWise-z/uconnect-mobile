@@ -200,6 +200,16 @@ final class UcPeerList extends Opaque {}
 DynamicLibrary openUconnectLibrary() {
   final override = Platform.environment['UCONNECT_C_LIBRARY'];
   if (override != null && override.isNotEmpty) {
+    // MinGW builds depend on libwinpthread-1.dll, which sits next to the
+    // library -- but Windows resolves dependencies from the process's PATH,
+    // where an older copy may shadow it. Preloading the sibling pins it.
+    final sep = override.contains('/') ? '/' : '\\';
+    final dir = override.substring(0, override.lastIndexOf(sep));
+    try {
+      DynamicLibrary.open('$dir${sep}libwinpthread-1.dll');
+    } on ArgumentError {
+      // not a MinGW build; nothing to preload
+    }
     return DynamicLibrary.open(override);
   }
   if (Platform.isAndroid) return DynamicLibrary.open('libuconnect_c.so');

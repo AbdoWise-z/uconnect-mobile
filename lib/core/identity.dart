@@ -62,7 +62,7 @@ class Identity {
       try {
         final text = (await file.readAsString()).trim();
         final seed = hexToBytes(text);
-        if (seed != null && seed.length == 32) return fromSeed(seed);
+        if (seed != null && seed.length == 32) return await fromSeed(seed);
       } on FileSystemException {
         // fall through to regenerate
       }
