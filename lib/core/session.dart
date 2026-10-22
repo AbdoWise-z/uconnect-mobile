@@ -137,6 +137,9 @@ class Session {
   String _topic = '';
   TopicCreds? _creds;
   Identity? identity;
+  // dev_ids that turned out to be this device itself (an older node of ours
+  // that outlived its app session); never shown or connected again.
+  final Set<String> _selfGhosts = {};
   Hello _localHello = Hello(name: 'uConnect', os: _osName(), services: const []);
   AccessPolicy _policy = AccessPolicy();
 
@@ -342,7 +345,11 @@ class Session {
         p.inLookup = false;
       }
       for (final info in list) {
-        if (info.devHex == selfId) continue;
+        // Skip this node's own registration, and any address of a previous
+        // node of ours that is still lingering in the topic (it proved our own
+        // identity key). The server dev_id is address-derived, so an old node
+        // of ours looks like a stranger until it proves who it is.
+        if (info.devHex == selfId || _selfGhosts.contains(info.devHex)) continue;
         final p = peers.putIfAbsent(info.devHex, () => PeerRecord(info.devHex));
         p.inLookup = true;
         p.stale = info.stale;
@@ -552,6 +559,17 @@ class Session {
     final binding = node?.channelBinding(_topic, dev);
     final key = binding == null ? null : await verifyProof(msg, binding);
     if (_node != node) return;
+    if (key != null && key == identity?.publicKeyHex) {
+      // This "peer" is really us — an older node of ours that outlived its app
+      // session (see _selfGhosts). The service should have shut it down on exit;
+      // if one slips through, never show it or connect to it.
+      log('Peer ${shortId(dev)} is this device itself; dropping it');
+      _selfGhosts.add(dev);
+      disconnectPeer(dev);
+      peers.remove(dev);
+      _refreshRecords();
+      return;
+    }
     if (key != null) {
       p.identityState = 'verified';
       p.identityKey = key;

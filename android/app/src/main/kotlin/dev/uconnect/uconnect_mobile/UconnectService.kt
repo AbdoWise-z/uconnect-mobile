@@ -31,6 +31,24 @@ class UconnectService : Service() {
         return START_STICKY
     }
 
+    // The user swiped the app out of recents. This foreground service is the
+    // only thing keeping the process — and with it the native networking thread
+    // in libuconnect_c.so — alive, so without this the node would keep its link
+    // to the rendezvous server and linger as a ghost: other devices would still
+    // see it, and the app would reconnect to its own old node on next launch.
+    // Tear the service down and end the process so the server drops this node at
+    // once (its socket closes), instead of after the freshness timeout.
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION") stopForeground(true)
+        }
+        stopSelf()
+        android.os.Process.killProcess(android.os.Process.myPid())
+    }
+
     private fun startForegroundCompat(text: String) {
         ensureChannel()
         val launch = packageManager.getLaunchIntentForPackage(packageName)
