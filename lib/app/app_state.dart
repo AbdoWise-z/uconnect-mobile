@@ -15,6 +15,7 @@ import '../core/storage/storage_client.dart';
 import '../core/storage/storage_offerer.dart';
 import '../core/wire.dart';
 import '../uconnect/uconnect.dart';
+import 'background.dart';
 import 'store.dart';
 
 class AppState extends ChangeNotifier {
@@ -32,6 +33,8 @@ class AppState extends ChangeNotifier {
   bool loaded = false;
   String startError = '';
   final _subs = <StreamSubscription<void>>[];
+  final _background = BackgroundKeepAlive();
+  SessionStatus _lastStatus = SessionStatus.offline;
 
   String get downloadsDir => '$dataDir${Platform.pathSeparator}downloads';
   String get sharedDir => '$dataDir${Platform.pathSeparator}shared';
@@ -55,7 +58,10 @@ class AppState extends ChangeNotifier {
       store.shares = [SharedFolder('Shared', sharedDir)];
     }
     _applyLocalConfig();
-    _subs.add(session.changed.listen((_) => notifyListeners()));
+    _subs.add(session.changed.listen((_) {
+      _syncBackgroundService();
+      notifyListeners();
+    }));
     _subs.add(storageClient.transfersChanged.listen((_) => notifyListeners()));
     _subs.add(storageOfferer.activityChanged.listen((_) => notifyListeners()));
     loaded = true;
@@ -87,6 +93,27 @@ class AppState extends ChangeNotifier {
   }
 
   bool get connected => session.status == SessionStatus.online;
+
+  // A session that is up, connecting or retrying holds the foreground service
+  // so the OS keeps the process alive in the background; offline/error drop it.
+  void _syncBackgroundService() {
+    final status = session.status;
+    if (status == _lastStatus) return;
+    _lastStatus = status;
+    switch (status) {
+      case SessionStatus.online:
+        final n = session.peers.values.where((p) => p.stateCode == 3).length;
+        _background.start(n == 0
+            ? 'Connected — no other devices yet'
+            : 'Connected to $n device${n == 1 ? '' : 's'}');
+      case SessionStatus.connecting:
+      case SessionStatus.reconnecting:
+        _background.start('Connecting…');
+      case SessionStatus.offline:
+      case SessionStatus.error:
+        _background.stop();
+    }
+  }
 
   Future<void> connect() async {
     startError = '';
@@ -187,6 +214,7 @@ class AppState extends ChangeNotifier {
     for (final s in _subs) {
       unawaited(s.cancel());
     }
+    unawaited(_background.stop());
     storageOfferer.dispose();
     unawaited(session.dispose());
     super.dispose();

@@ -8,6 +8,7 @@ import '../app/app_state.dart';
 import '../core/permissions.dart';
 import '../core/session.dart';
 import '../core/wire.dart';
+import 'screen_view.dart';
 import 'storage_view.dart';
 import 'theme.dart';
 
@@ -263,13 +264,17 @@ class DeviceView extends StatelessWidget {
   Widget _servicesCard(BuildContext context, PeerRecord p) {
     final offersStorage = p.services.contains(Services.storage);
     final mayBrowse = p.grantedToMe.contains(Perm.storageObserve);
+    final offersScreen = p.services.contains(Services.screen);
+    final mayWatch = p.grantedToMe.contains(Perm.screenView);
     return _card('On that device', [
       if (p.grantedToMe.isNotEmpty)
         _row('Granted to us', p.grantedToMe.join(', '))
       else
         _row('Granted to us', 'nothing yet'),
       const SizedBox(height: 8),
-      Row(
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
         children: [
           FilledButton.icon(
             onPressed: p.stateCode == 3 && offersStorage && mayBrowse
@@ -283,6 +288,18 @@ class DeviceView extends StatelessWidget {
             icon: const Icon(Icons.folder_outlined, size: 18),
             label: const Text('Browse files'),
           ),
+          FilledButton.icon(
+            onPressed: p.stateCode == 3 && offersScreen && mayWatch
+                ? () {
+                    Navigator.of(context).push(MaterialPageRoute<void>(
+                      builder: (_) => ScreenView(
+                          state: state, devId: p.devId, devName: p.displayName),
+                    ));
+                  }
+                : null,
+            icon: const Icon(Icons.screen_share_outlined, size: 18),
+            label: const Text('Watch screen'),
+          ),
         ],
       ),
       if (offersStorage && !mayBrowse)
@@ -290,6 +307,14 @@ class DeviceView extends StatelessWidget {
           padding: EdgeInsets.only(top: 6),
           child: Text(
             'It offers storage but has not granted browsing to this device.',
+            style: TextStyle(fontSize: 12, color: UcColors.textSecondary),
+          ),
+        ),
+      if (offersScreen && !mayWatch)
+        const Padding(
+          padding: EdgeInsets.only(top: 6),
+          child: Text(
+            'It offers screen sharing but has not granted watching to this device.',
             style: TextStyle(fontSize: 12, color: UcColors.textSecondary),
           ),
         ),
