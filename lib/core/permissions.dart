@@ -1,0 +1,132 @@
+// Permissions this device can grant to others, each with a unique, stable
+// name ("<service>.<action>"); the ids and semantics are the protocol's
+// (docs/protocol.md section 4) and match uconnect-desktop's table. The UI is
+// built from this table, so adding a permission is one entry here plus the
+// check where the action is served.
+
+class Perm {
+  static const storageObserve = 'storage.observe';
+  static const storageRead = 'storage.read';
+  static const storageWrite = 'storage.write';
+  static const storageUpload = 'storage.upload';
+  static const cameraView = 'camera.view';
+  static const screenView = 'screen.view';
+  static const screenDirect = 'screen.direct';
+  static const controlInput = 'control.input';
+  static const controlDirect = 'control.direct';
+  static const displayShow = 'display.show';
+  static const displayDirect = 'display.direct';
+}
+
+class PermissionInfo {
+  const PermissionInfo({
+    required this.id,
+    required this.service,
+    required this.label,
+    required this.description,
+    this.available = true,
+    this.trustedOnly = false,
+  });
+
+  final String id;
+  final String service; // as in hello's service names
+  final String label; // short, shown next to a switch
+  final String description; // one sentence: what the other device can do
+  final bool available; // false while the action itself does not exist yet
+  final bool trustedOnly;
+}
+
+/// What this app can serve today: storage fully; screen/control/camera
+/// hosting and being an extended display are not offered from a phone in this
+/// version, so their grants are listed but unavailable.
+const List<PermissionInfo> permissionTable = [
+  PermissionInfo(
+      id: Perm.storageObserve,
+      service: 'storage',
+      label: 'Observe',
+      description:
+          'Browse the shared folders and see the names, sizes and dates of the files in them.'),
+  PermissionInfo(
+      id: Perm.storageRead,
+      service: 'storage',
+      label: 'Read',
+      description: 'Open files and save copies of them to their device.'),
+  PermissionInfo(
+      id: Perm.storageWrite,
+      service: 'storage',
+      label: 'Write',
+      description: 'Rename, move, replace or delete existing files and folders.'),
+  PermissionInfo(
+      id: Perm.storageUpload,
+      service: 'storage',
+      label: 'Upload',
+      description: 'Add new files and folders, and copy what is already there.'),
+  PermissionInfo(
+      id: Perm.cameraView,
+      service: 'camera',
+      label: 'View',
+      description: 'Watch this device\'s camera.',
+      available: false,
+      trustedOnly: true),
+  PermissionInfo(
+      id: Perm.screenView,
+      service: 'screen',
+      label: 'View',
+      description: 'Watch this device\'s screen.',
+      available: false,
+      trustedOnly: true),
+  PermissionInfo(
+      id: Perm.screenDirect,
+      service: 'screen',
+      label: 'Without asking',
+      description:
+          'View the screen without a consent prompt. Trusted devices only.',
+      available: false,
+      trustedOnly: true),
+  PermissionInfo(
+      id: Perm.controlInput,
+      service: 'control',
+      label: 'Control',
+      description: 'Use this device\'s mouse and keyboard.',
+      available: false,
+      trustedOnly: true),
+  PermissionInfo(
+      id: Perm.controlDirect,
+      service: 'control',
+      label: 'Without asking',
+      description:
+          'Control mouse and keyboard without a consent prompt. Trusted devices only.',
+      available: false,
+      trustedOnly: true),
+  PermissionInfo(
+      id: Perm.displayShow,
+      service: 'display',
+      label: 'Use as display',
+      description: 'Ask to use this device\'s screen as an extra monitor.',
+      available: false,
+      trustedOnly: true),
+  PermissionInfo(
+      id: Perm.displayDirect,
+      service: 'display',
+      label: 'Without asking',
+      description:
+          'Use this device\'s screen as a monitor without a consent prompt. Trusted devices only.',
+      available: false,
+      trustedOnly: true),
+];
+
+bool isKnownPermission(String id) => permissionTable.any((p) => p.id == id);
+
+bool isTrustedOnlyPermission(String id) =>
+    permissionTable.any((p) => p.id == id && p.trustedOnly);
+
+/// A saved grant of `storage.download`, from an earlier protocol revision,
+/// means `storage.read`.
+Set<String> normalizePermissions(Iterable<String> ids) => {
+      for (final id in ids)
+        if (id == 'storage.download') Perm.storageRead else id
+    };
+
+/// Untrusted devices never hold trusted-only grants, whatever is saved.
+Set<String> permissionsForUntrusted(Set<String> permissions) =>
+    {...permissions}..removeWhere(isTrustedOnlyPermission);
