@@ -15,12 +15,17 @@ class ScreenView extends StatefulWidget {
     required this.state,
     required this.devId,
     required this.devName,
+    this.startControl = false,
     super.key,
   });
 
   final AppState state;
   final String devId;
   final String devName;
+
+  /// Open straight into controlling (take control as soon as it is available),
+  /// rather than view-only.
+  final bool startControl;
 
   @override
   State<ScreenView> createState() => _ScreenViewState();
@@ -45,12 +50,19 @@ class _ScreenViewState extends State<ScreenView> {
         final id = await _decoder.start(_viewer);
         if (mounted) setState(() => _textureId = id);
       }
+      // Auto-take control when opened as a control session.
+      if (widget.startControl &&
+          _viewer.active &&
+          _canControl &&
+          !_viewer.controlOn) {
+        _viewer.requestControl(true);
+      }
       if (mounted) setState(() {});
     });
     _decoder.sizeChanged.listen((_) {
       if (mounted) setState(() {});
     });
-    _viewer.request(widget.devId, wantControl: false);
+    _viewer.request(widget.devId, wantControl: widget.startControl);
   }
 
   @override
@@ -192,7 +204,7 @@ class _ScreenViewState extends State<ScreenView> {
         Positioned.fill(child: Container(color: Colors.black)),
         Center(
           child: _canControl && _viewer.controlOn
-              ? _controlSurface(video, aspect)
+              ? _controlSurface(id, aspect)
               : video,
         ),
         keyboardSink,
@@ -241,35 +253,32 @@ class _ScreenViewState extends State<ScreenView> {
         ),
       );
 
-  // Maps touches on the video to normalized pointer coordinates and buttons.
-  Widget _controlSurface(Widget video, double aspect) {
-    return LayoutBuilder(builder: (context, constraints) {
-      return Listener(
-        onPointerDown: (e) {
-          _buttons = MouseButton.left;
-          _emit(e.localPosition, constraints.biggest, aspect);
-        },
-        onPointerMove: (e) => _emit(e.localPosition, constraints.biggest, aspect),
-        onPointerUp: (e) {
-          _buttons = 0;
-          _emit(e.localPosition, constraints.biggest, aspect);
-        },
-        child: video,
-      );
-    });
+  // The Listener sits exactly on the letterboxed video (inside the
+  // AspectRatio), so a touch maps straight to a normalized position.
+  Widget _controlSurface(int textureId, double aspect) {
+    return AspectRatio(
+      aspectRatio: aspect,
+      child: LayoutBuilder(builder: (context, constraints) {
+        final box = constraints.biggest;
+        return Listener(
+          onPointerDown: (e) {
+            _buttons = MouseButton.left;
+            _emit(e.localPosition, box);
+          },
+          onPointerMove: (e) => _emit(e.localPosition, box),
+          onPointerUp: (e) {
+            _buttons = 0;
+            _emit(e.localPosition, box);
+          },
+          child: Texture(textureId: textureId),
+        );
+      }),
+    );
   }
 
-  void _emit(Offset pos, Size box, double aspect) {
-    // The video is letterboxed inside the box; map to the video rect.
-    double vw = box.width, vh = box.width / aspect;
-    if (vh > box.height) {
-      vh = box.height;
-      vw = box.height * aspect;
-    }
-    final left = (box.width - vw) / 2;
-    final top = (box.height - vh) / 2;
-    final nx = ((pos.dx - left) / vw).clamp(0.0, 1.0);
-    final ny = ((pos.dy - top) / vh).clamp(0.0, 1.0);
+  void _emit(Offset pos, Size box) {
+    final nx = (pos.dx / box.width).clamp(0.0, 1.0);
+    final ny = (pos.dy / box.height).clamp(0.0, 1.0);
     _viewer.sendPointer(nx, ny, _buttons);
   }
 }

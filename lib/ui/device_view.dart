@@ -266,6 +266,8 @@ class DeviceView extends StatelessWidget {
     final mayBrowse = p.grantedToMe.contains(Perm.storageObserve);
     final offersScreen = p.services.contains(Services.screen);
     final mayWatch = p.grantedToMe.contains(Perm.screenView);
+    final offersControl = p.services.contains(Services.control);
+    final mayControl = p.grantedToMe.contains(Perm.controlInput);
     return _card('On that device', [
       if (p.grantedToMe.isNotEmpty)
         _row('Granted to us', p.grantedToMe.join(', '))
@@ -300,8 +302,33 @@ class DeviceView extends StatelessWidget {
             icon: const Icon(Icons.screen_share_outlined, size: 18),
             label: const Text('Watch screen'),
           ),
+          if (offersControl && mayControl)
+            FilledButton.icon(
+              onPressed: p.stateCode == 3 && offersScreen && mayWatch
+                  ? () {
+                      Navigator.of(context).push(MaterialPageRoute<void>(
+                        builder: (_) => ScreenView(
+                            state: state,
+                            devId: p.devId,
+                            devName: p.displayName,
+                            startControl: true),
+                      ));
+                    }
+                  : null,
+              icon: const Icon(Icons.touch_app_outlined, size: 18),
+              label: const Text('Control'),
+            ),
         ],
       ),
+      if (offersControl && mayControl && !mayWatch)
+        const Padding(
+          padding: EdgeInsets.only(top: 6),
+          child: Text(
+            'It granted control but not screen viewing — you need to watch the '
+            'screen to control it.',
+            style: TextStyle(fontSize: 12, color: UcColors.textSecondary),
+          ),
+        ),
       if (offersStorage && !mayBrowse)
         const Padding(
           padding: EdgeInsets.only(top: 6),

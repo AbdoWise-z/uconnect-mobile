@@ -87,16 +87,16 @@ const List<PermissionInfo> permissionTable = [
       id: Perm.controlInput,
       service: 'control',
       label: 'Control',
-      description: 'Use this device\'s mouse and keyboard.',
-      available: false,
+      description: 'Tap, swipe, scroll and type on this device while watching its screen.',
+      available: true,
       trustedOnly: true),
   PermissionInfo(
       id: Perm.controlDirect,
       service: 'control',
       label: 'Without asking',
       description:
-          'Control mouse and keyboard without a consent prompt. Trusted devices only.',
-      available: false,
+          'Control this device without a consent prompt. Trusted devices only.',
+      available: true,
       trustedOnly: true),
   PermissionInfo(
       id: Perm.displayShow,
