@@ -185,7 +185,12 @@ class ScreenViewer {
   void stop() {
     final dev = _dev;
     if (dev != null && _session != 0) {
-      session.sendControl(dev, {'t': _t('stop'), 'session': _session});
+      // Name the request as well as the session: the host tells a viewer's stop
+      // from a host's by the presence of a request id, and only then drops our
+      // viewer slot. Without it a re-request (e.g. a quality change) is refused
+      // as "busy" because our previous slot is still counted.
+      session.sendControl(
+          dev, {'t': _t('stop'), 'session': _session, 'request': _request});
     } else if (dev != null && _request != 0 && state != ViewerState.idle) {
       session.sendControl(
           dev, {'t': _t('stop'), 'session': 0, 'request': _request});
