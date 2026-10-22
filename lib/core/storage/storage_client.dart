@@ -202,6 +202,8 @@ class StorageClient {
   bool _onControl(String dev, Map<String, Object?> msg) {
     final t = msg['t'];
     if (t is! String || !t.startsWith('fs.')) return false;
+    // Only the replies to our own requests are ours; fs.list, fs.read and the
+    // other REQUESTS fall through to the offerer, and unknown types to no one.
     final id = msg['id'] is num ? (msg['id'] as num).toInt() : null;
     switch (t) {
       case 'fs.list.r':
@@ -228,7 +230,7 @@ class StorageClient {
           if (cb != null && path is String) cb(path);
         }
       default:
-        return true; // an fs.* type we do not know: consumed, ignored
+        return false;
     }
     return true;
   }
@@ -551,6 +553,9 @@ class StorageClient {
         while (!session.sendFrame(
             u.transfer.dev, MessageKind.storageUploadData, u.transfer.id, chunk)) {
           if (u.cancelled) throw FsException('cancelled', 'Cancelled.');
+          if (session.peers[u.transfer.dev]?.stateCode != 3) {
+            throw FsException('disconnected', 'The device disconnected.');
+          }
           await Future<void>.delayed(const Duration(milliseconds: 50));
         }
         sent += chunk.length;

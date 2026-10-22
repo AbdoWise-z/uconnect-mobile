@@ -14,7 +14,8 @@ include(FetchContent)
 # Pinned to the same uconnect revision the desktop app ships with (plus its
 # license commit); bump deliberately, with a round of E2E tests.
 set(UCONNECT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(UCONNECT_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+option(UCMOBILE_BUILD_SERVER "Also build uconnect-rendezvous (for host-side tests)" OFF)
+set(UCONNECT_BUILD_SERVER ${UCMOBILE_BUILD_SERVER} CACHE BOOL "" FORCE)
 FetchContent_Declare(
     uconnect
     GIT_REPOSITORY https://github.com/AbdoWise-z/uconnect.git
