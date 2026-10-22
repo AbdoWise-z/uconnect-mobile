@@ -592,6 +592,7 @@ class ScreenViewer {
 
   Future<void> dispose() async {
     stop();
+    session.removeControlHandler(_onControl);
     await _units.close();
     await _cursorMoves.close();
     await _cursorImages.close();

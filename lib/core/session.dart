@@ -176,6 +176,7 @@ class Session {
   Hello get localHello => _localHello;
 
   void addControlHandler(ControlHandler h) => _controlHandlers.add(h);
+  void removeControlHandler(ControlHandler h) => _controlHandlers.remove(h);
   void setFrameHandler(int kind, FrameHandler h) => _frameHandlers[kind] = h;
   void addPeerStateHandler(void Function(String dev, int state) h) =>
       _peerStateHandlers.add(h);

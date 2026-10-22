@@ -502,6 +502,7 @@ class ScreenHost {
   }
 
   Future<void> dispose() async {
+    session.removeControlHandler(_onControl);
     await _teardownAsync();
     await _changed.close();
   }
