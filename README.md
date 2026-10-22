@@ -29,6 +29,13 @@ features that this version of the mobile app does not implement yet; the
 protocol leaves room for them, and the permission editor lists them as
 unavailable.
 
+### Screenshots
+
+<p align="center">
+  <img src="docs/images/connect-page.png" width="260"
+       alt="The first-run page: rendezvous server, invite link, Connect">
+</p>
+
 ## How it works
 
 Devices find each other through a **rendezvous server**, which introduces
