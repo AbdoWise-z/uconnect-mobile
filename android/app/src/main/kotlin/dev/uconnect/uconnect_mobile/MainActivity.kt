@@ -29,6 +29,7 @@ class MainActivity : FlutterActivity() {
 
     private var screenDecoder: ScreenDecoder? = null
     private var screenCapturer: ScreenCapturer? = null
+    private var cameraCapturer: CameraCapturer? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -39,6 +40,10 @@ class MainActivity : FlutterActivity() {
         )
         // Captures and encodes this device's screen (sharing to a peer).
         screenCapturer = ScreenCapturer(
+            this, flutterEngine.dartExecutor.binaryMessenger
+        )
+        // Captures and encodes this device's camera (sharing to a peer).
+        cameraCapturer = CameraCapturer(
             this, flutterEngine.dartExecutor.binaryMessenger
         )
         // Dart starts the foreground service when a session connects and stops
@@ -128,6 +133,15 @@ class MainActivity : FlutterActivity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == ScreenCapturer.CONSENT_REQUEST) {
             screenCapturer?.onConsentResult(resultCode, data)
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == CameraCapturer.PERMISSION_REQUEST) {
+            cameraCapturer?.onPermissionResult(grantResults)
         }
     }
 }

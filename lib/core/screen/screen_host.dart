@@ -24,7 +24,11 @@ typedef ConsentAsk = Future<bool> Function(String dev, String name,
 
 class ScreenHost {
   ScreenHost(this.session, this.capture, this.input,
-      {required this.askConsent}) {
+      {required this.askConsent,
+      this.prefix = 'scr',
+      this.videoKind = 1,
+      this.viewPerm = Perm.screenView,
+      this.directPerm = Perm.screenDirect}) {
     session.addControlHandler(_onControl);
     session.addPeerStateHandler((dev, state) {
       if (dev == _viewer && (state == 4 || state == 5)) _teardown();
@@ -32,9 +36,19 @@ class ScreenHost {
   }
 
   final Session session;
-  final CaptureController capture;
+  final VideoSource capture;
   final RemoteInput input;
   final ConsentAsk askConsent;
+
+  /// 'scr' for a screen, 'cam' for a camera: the control-message prefix and
+  /// video datagram kind (1 vs 3) differ; a camera has no control channel and
+  /// always asks for consent (no "direct" grant).
+  final String prefix;
+  final int videoKind;
+  final String viewPerm;
+  final String? directPerm;
+
+  bool get _supportsControl => prefix == 'scr';
 
   /// Whether this device offers screen sharing at all; mirrors the hello.
   bool offered = false;
@@ -75,19 +89,35 @@ class ScreenHost {
   bool _onControl(String dev, Map<String, Object?> msg) {
     final t = msg['t'];
     if (t is! String) return false;
+    // Our own video-channel messages (scr.* or cam.*).
+    if (t.startsWith('$prefix.')) {
+      switch (t.substring(prefix.length + 1)) {
+        case 'request':
+          _onRequest(dev, msg);
+        case 'keyframe':
+          if (_is(msg, 'session') && dev == _viewer) capture.requestKeyframe();
+        case 'nack':
+          if (_is(msg, 'session') && dev == _viewer) _onNack(msg);
+        case 'report':
+          if (_is(msg, 'session') && dev == _viewer) _onReport(msg);
+        case 'control':
+          if (_supportsControl && _is(msg, 'session') && dev == _viewer) {
+            unawaited(_onControlRequest(dev, msg));
+          }
+        case 'stop':
+          if (dev == _viewer &&
+              (_is(msg, 'session') ||
+                  (_session == 0 && _intf(msg, 'request') == _request))) {
+            _teardown();
+          }
+        default:
+          return false;
+      }
+      return true;
+    }
+    // Remote-control input (screen only); a camera has no input channel.
+    if (!_supportsControl) return false;
     switch (t) {
-      case 'scr.request':
-        _onRequest(dev, msg);
-      case 'scr.keyframe':
-        if (_is(msg, 'session') && dev == _viewer) capture.requestKeyframe();
-      case 'scr.nack':
-        if (_is(msg, 'session') && dev == _viewer) _onNack(msg);
-      case 'scr.report':
-        if (_is(msg, 'session') && dev == _viewer) _onReport(msg);
-      case 'scr.control':
-        if (_is(msg, 'session') && dev == _viewer) {
-          unawaited(_onControlRequest(dev, msg));
-        }
       case 'in.mouse':
         if (_controlOn && dev == _viewer && _is(msg, 'session')) {
           final x = (msg['x'] is num ? (msg['x'] as num).toDouble() : 0.0);
@@ -113,12 +143,6 @@ class ScreenHost {
         if (_controlOn && dev == _viewer && _is(msg, 'session')) {
           input.release();
         }
-      case 'scr.stop':
-        if (dev == _viewer &&
-            (_is(msg, 'session') ||
-                (_session == 0 && _intf(msg, 'request') == _request))) {
-          _teardown();
-        }
       default:
         return false;
     }
@@ -135,7 +159,7 @@ class ScreenHost {
     final request = _intf(msg, 'request');
     if (request == 0) return;
     void err(String code) => session.sendControl(
-        dev, {'t': 'scr.err', 'request': request, 'code': code});
+        dev, {'t': '$prefix.err', 'request': request, 'code': code});
 
     if (!offered || !capture.supported) return err('forbidden');
     // Codec check.
@@ -143,15 +167,16 @@ class ScreenHost {
     if (codecs is List && !codecs.contains('h264')) return err('codec');
     // Only one viewer at a time.
     if (state == HostState.sharing) return err('busy');
-    // The peer must have proven identity and hold screen.view here.
+    // The peer must have proven identity and hold the view permission here.
     final perms = session.permissionsFor(dev);
     final peer = session.peers[dev];
     if (peer == null || peer.identityState != 'verified') return err('forbidden');
-    if (!perms.contains(Perm.screenView)) return err('forbidden');
+    if (!perms.contains(viewPerm)) return err('forbidden');
 
-    // Consent, unless the peer holds screen.direct.
-    if (!perms.contains(Perm.screenDirect)) {
-      session.sendControl(dev, {'t': 'scr.wait', 'request': request});
+    // Consent, unless the peer holds the matching "direct" grant. A camera has
+    // no direct grant (directPerm is null), so it always asks.
+    if (directPerm == null || !perms.contains(directPerm!)) {
+      session.sendControl(dev, {'t': '$prefix.wait', 'request': request});
       final ok = await askConsent(dev, peer.displayName, control: false);
       if (!ok) return err('denied');
       if (state == HostState.sharing) return err('busy');
@@ -195,7 +220,7 @@ class ScreenHost {
     session.node?.openDatagrams(session.topicId, dev, session.mediaFallback);
 
     session.sendControl(dev, {
-      't': 'scr.started',
+      't': '$prefix.started',
       'request': request,
       'session': _session,
       'codec': 'h264',
@@ -207,8 +232,8 @@ class ScreenHost {
       'cursorEmbedded': true,
     });
 
-    // An initial wantControl request is handled once sharing is up.
-    if (msg['wantControl'] == true) {
+    // An initial wantControl request is handled once sharing is up (screen).
+    if (_supportsControl && msg['wantControl'] == true) {
       unawaited(_setControl(dev, request, true));
     }
 
@@ -292,7 +317,7 @@ class ScreenHost {
       bool retransmit, int ts, Uint8List payload) {
     final dg = Uint8List(16 + payload.length);
     final bd = ByteData.sublistView(dg);
-    dg[0] = 1; // screen video
+    dg[0] = videoKind; // 1 = screen video, 3 = camera video
     dg[1] = (keyframe ? 1 : 0) | (retransmit ? 2 : 0);
     bd.setUint16(2, _session);
     bd.setUint32(4, seq);
@@ -373,7 +398,7 @@ class ScreenHost {
   Future<void> stop() async {
     final dev = _viewer;
     if (dev != null && _session != 0) {
-      session.sendControl(dev, {'t': 'scr.stop', 'session': _session});
+      session.sendControl(dev, {'t': '$prefix.stop', 'session': _session});
     }
     await _teardownAsync();
   }

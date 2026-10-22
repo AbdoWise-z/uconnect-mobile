@@ -244,6 +244,17 @@ class _SettingsPageState extends State<SettingsPage> {
       SwitchListTile(
         dense: true,
         contentPadding: EdgeInsets.zero,
+        title: const Text('Offer camera', style: TextStyle(fontSize: 13)),
+        subtitle: const Text(
+            'Let a trusted device you grant it watch this device\'s camera. '
+            'Asks for the camera permission, and to confirm each viewer.',
+            style: TextStyle(fontSize: 11, color: UcColors.textSecondary)),
+        value: state.store.offerCamera,
+        onChanged: (on) => state.saveSettings(offerCamera: on),
+      ),
+      SwitchListTile(
+        dense: true,
+        contentPadding: EdgeInsets.zero,
         title: const Text('Offer remote control', style: TextStyle(fontSize: 13)),
         subtitle: const Text(
             'Let a trusted device you grant it control this device while it '

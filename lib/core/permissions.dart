@@ -66,7 +66,7 @@ const List<PermissionInfo> permissionTable = [
       service: 'camera',
       label: 'View',
       description: 'Watch this device\'s camera.',
-      available: false,
+      available: true,
       trustedOnly: true),
   PermissionInfo(
       id: Perm.screenView,

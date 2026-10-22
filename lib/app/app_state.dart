@@ -12,6 +12,7 @@ import '../core/identity.dart';
 import '../core/permissions.dart';
 import '../core/screen/remote_input.dart';
 import '../core/screen/screen_capture.dart';
+import '../core/screen/camera_capture.dart';
 import '../core/screen/screen_host.dart';
 import '../core/session.dart';
 import '../core/storage/storage_client.dart';
@@ -34,8 +35,10 @@ class AppState extends ChangeNotifier {
   late final storageClient = StorageClient(session);
   late final storageOfferer = StorageOfferer(session);
   final capture = CaptureController();
+  final cameraCapture = CameraCaptureController();
   final input = RemoteInput();
   late final ScreenHost screenHost;
+  late final ScreenHost cameraHost;
 
   /// Set by the app shell so the screen-consent prompt has a context.
   final navigatorKey = GlobalKey<NavigatorState>();
@@ -54,6 +57,14 @@ class AppState extends ChangeNotifier {
     await store.load();
     screenHost =
         ScreenHost(session, capture, input, askConsent: _askScreenConsent);
+    // The camera reuses the host, as cam.* with video kind 3 and no control or
+    // "direct" grant (a camera always asks for consent).
+    cameraHost = ScreenHost(session, cameraCapture, input,
+        askConsent: _askScreenConsent,
+        prefix: 'cam',
+        videoKind: 3,
+        viewPerm: Perm.cameraView,
+        directPerm: null);
     identity =
         await Identity.loadOrCreate('$dataDir${Platform.pathSeparator}identity');
     session.identity = identity;
@@ -72,12 +83,14 @@ class AppState extends ChangeNotifier {
     }
     _applyLocalConfig();
     screenHost.offered = store.offerScreen;
+    cameraHost.offered = store.offerCamera && cameraCapture.supported;
     _controlAvailable = await input.available();
     _subs.add(session.changed.listen((_) {
       _syncBackgroundService();
       notifyListeners();
     }));
     _subs.add(screenHost.changed.listen((_) => notifyListeners()));
+    _subs.add(cameraHost.changed.listen((_) => notifyListeners()));
     _subs.add(storageClient.transfersChanged.listen((_) => notifyListeners()));
     _subs.add(storageOfferer.activityChanged.listen((_) => notifyListeners()));
     loaded = true;
@@ -92,8 +105,10 @@ class AppState extends ChangeNotifier {
     storageOfferer.shares = store.shares;
     final screenOn = store.offerScreen && capture.supported;
     final controlOn = store.offerControl && _controlAvailable;
+    final cameraOn = store.offerCamera && cameraCapture.supported;
     screenHost.offered = screenOn;
     screenHost.offerControl = controlOn;
+    cameraHost.offered = cameraOn;
     session.setLocalHello(Hello(
       name: store.deviceName,
       os: Platform.isAndroid
@@ -105,6 +120,7 @@ class AppState extends ChangeNotifier {
         if (store.offerStorage) Services.storage,
         if (screenOn) Services.screen,
         if (controlOn) Services.control,
+        if (cameraOn) Services.camera,
       ],
     ));
     session.setAccessPolicy(AccessPolicy(
@@ -187,6 +203,7 @@ class AppState extends ChangeNotifier {
     bool? offerStorage,
     bool? offerScreen,
     bool? offerControl,
+    bool? offerCamera,
     int? relayMode,
     int? screenMaxWidth,
     int? screenMaxFps,
@@ -199,6 +216,7 @@ class AppState extends ChangeNotifier {
     if (offerStorage != null) store.offerStorage = offerStorage;
     if (offerScreen != null) store.offerScreen = offerScreen;
     if (offerControl != null) store.offerControl = offerControl;
+    if (offerCamera != null) store.offerCamera = offerCamera;
     if (relayMode != null) store.relayMode = relayMode;
     if (screenMaxWidth != null) store.screenMaxWidth = screenMaxWidth;
     if (screenMaxFps != null) store.screenMaxFps = screenMaxFps;
@@ -297,6 +315,7 @@ class AppState extends ChangeNotifier {
   void shutdown() {
     unawaited(_background.stop());
     unawaited(screenHost.stop());
+    unawaited(cameraHost.stop());
     unawaited(session.stop());
   }
 
@@ -307,6 +326,7 @@ class AppState extends ChangeNotifier {
     }
     unawaited(_background.stop());
     unawaited(screenHost.dispose());
+    unawaited(cameraHost.dispose());
     storageOfferer.dispose();
     unawaited(session.dispose());
     super.dispose();

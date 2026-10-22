@@ -66,6 +66,7 @@ class AppStore {
   bool offerStorage = true;
   bool offerScreen = false;
   bool offerControl = false;
+  bool offerCamera = false;
   int relayMode = RelayMode.auto;
   bool get forceRelay => relayMode == RelayMode.always;
   // Quality to ask for when watching another device's screen. The default is
@@ -96,6 +97,7 @@ class AppStore {
         : true;
     offerScreen = decoded['offerScreen'] == true;
     offerControl = decoded['offerControl'] == true;
+    offerCamera = decoded['offerCamera'] == true;
     relayMode = decoded['relayMode'] is int
         ? (decoded['relayMode'] as int).clamp(RelayMode.auto, RelayMode.direct)
         : (decoded['forceRelay'] == true ? RelayMode.always : RelayMode.auto);
@@ -134,6 +136,7 @@ class AppStore {
       'offerStorage': offerStorage,
       'offerScreen': offerScreen,
       'offerControl': offerControl,
+      'offerCamera': offerCamera,
       'relayMode': relayMode,
       'screenMaxWidth': screenMaxWidth,
       'screenMaxFps': screenMaxFps,

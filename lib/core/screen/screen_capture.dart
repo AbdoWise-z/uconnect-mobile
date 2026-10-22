@@ -14,7 +14,27 @@ class CaptureUnit {
   final int ptsUs;
 }
 
-class CaptureController {
+/// A source of encoded H.264 access units the host fragments and sends: the
+/// screen (CaptureController) or the camera (CameraCaptureController). The host
+/// (screen_host.dart) drives any of these the same way.
+abstract class VideoSource {
+  bool get supported;
+  Stream<CaptureUnit> accessUnits();
+
+  /// Obtains permission to capture (the OS screen-capture dialog, or the camera
+  /// runtime permission); true when granted.
+  Future<bool> requestConsent();
+  Future<Size> start(
+      {required int width,
+      required int height,
+      required int fps,
+      required int bitrate});
+  Future<void> requestKeyframe();
+  Future<void> setBitrate(int bitrate);
+  Future<void> stop();
+}
+
+class CaptureController implements VideoSource {
   static const _channel = MethodChannel('uconnect/capture');
   static const _events = EventChannel('uconnect/capture/au');
 
