@@ -23,11 +23,11 @@ if ($DeviceId) { $adbArgs = @("-s", $DeviceId) }
 $port = Get-Random -Minimum 20000 -Maximum 40000
 $share = Join-Path $env:TEMP "uc-e2e-share-$port"
 New-Item -ItemType Directory -Force $share | Out-Null
-Set-Content -Encoding utf8 -NoNewline (Join-Path $share "hello.txt") "hello from the desk"
+Set-Content -Path (Join-Path $share "hello.txt") -Value "hello from the desk" -Encoding utf8 -NoNewline
 
 # A fresh keyed topic for this run.
 $env:UCONNECT_C_LIBRARY = $dll
-$topic = (dart run (Join-Path $root "bin\make_topic.dart")).Trim()
+$topic = (dart run (Join-Path $root "bin\make_topic.dart") | Select-Object -Last 1).Trim()
 if (-not $topic.StartsWith("uconn://")) { Write-Error "could not make a topic: $topic"; exit 1 }
 
 $server = Start-Process $rvz -ArgumentList @("--port", "$port", "--quiet") -PassThru -NoNewWindow
