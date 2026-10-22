@@ -1,13 +1,13 @@
 // A device's long-term identity: an Ed25519 key pair (RFC 8032), generated
 // once and kept in the app's private storage. Wire format and semantics match
-// uconnect-desktop's Identity (docs/protocol.md section 3):
+// the uConnect app protocol (docs/protocol.md section 3):
 //
 //     {"t":"id", "v":1, "key":"<64 hex>", "sig":"<128 hex>"}
 //
-// where sig signs  "uconnect-desktop identity v1" || 0x00 ||
-// channel_binding(32) || public key(32). The context string is the desktop
-// one on purpose: both apps speak protocol v1, and a different string would
-// split the ecosystem into apps that cannot verify each other.
+// where sig signs  "uconnect identity v1" || 0x00 ||
+// channel_binding(32) || public key(32). The context string is the same on
+// every uConnect app (desktop and mobile) on purpose: a different string
+// would split the ecosystem into apps that cannot verify each other.
 
 import 'dart:convert';
 import 'dart:io';
@@ -20,7 +20,7 @@ import '../uconnect/uconnect.dart' show bytesToHex, hexToBytes;
 
 final _ed25519 = Ed25519();
 
-const _contextV1 = 'uconnect-desktop identity v1'; // 28 ASCII bytes
+const _contextV1 = 'uconnect identity v1'; // 20 ASCII bytes
 
 Uint8List _proofMessage(Uint8List binding, Uint8List publicKey) {
   final context = ascii.encode(_contextV1);
