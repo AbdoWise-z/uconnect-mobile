@@ -149,8 +149,15 @@ class ScreenViewer {
 
   /// Asks the peer to share its screen. The peer may ask its user first, in
   /// which case state becomes [ViewerState.waiting].
+  ///
+  /// The defaults are deliberately modest: a phone's hardware H.264 decoder
+  /// plus Flutter compositing cannot keep up with a full-resolution desktop at
+  /// 60 fps, which shows up as tearing during motion (dragging a window). The
+  /// host scales and paces down to what we ask for (ScreenService honours the
+  /// per-viewer maxWidth/maxFps), so a lower cap keeps playback smooth; a phone
+  /// screen cannot resolve more than this of a shared desktop anyway.
   void request(String devId,
-      {bool wantControl = false, int maxWidth = 1920, int maxFps = 60}) {
+      {bool wantControl = false, int maxWidth = 1280, int maxFps = 30}) {
     stop();
     _dev = devId;
     _request = _nextRequestId++;
