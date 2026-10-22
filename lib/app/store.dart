@@ -8,6 +8,25 @@ import 'dart:io';
 
 import '../core/storage/storage_offerer.dart';
 
+/// How the connection may use the server's relay.
+///  - [auto]: connect directly when possible, fall back to the relay.
+///  - [always]: skip NAT punching and always go through the relay.
+///  - [direct]: never relay the media; a direct path is required for it
+///    (the tiny control channel may still relay — the library always keeps
+///    that fallback — but no screen/file data goes through the server).
+class RelayMode {
+  static const auto = 0;
+  static const always = 1;
+  static const direct = 2;
+
+  static const labels = ['Auto', 'Always relay', 'Direct only'];
+  static const blurbs = [
+    'Direct when possible, through the relay when it is not.',
+    'Skip NAT punching; for networks where direct is known to fail.',
+    'Never send media through the relay; needs a direct connection.',
+  ];
+}
+
 class TrustedDevice {
   TrustedDevice(this.keyHex, this.name, this.permissions);
   final String keyHex;
@@ -47,7 +66,8 @@ class AppStore {
   bool offerStorage = true;
   bool offerScreen = false;
   bool offerControl = false;
-  bool forceRelay = false;
+  int relayMode = RelayMode.auto;
+  bool get forceRelay => relayMode == RelayMode.always;
   // Quality to ask for when watching another device's screen. The default is
   // full; the viewer lets the user pick a lower one when the phone's decoder
   // cannot keep up (see ScreenQuality in ui/screen_view.dart).
@@ -76,8 +96,9 @@ class AppStore {
         : true;
     offerScreen = decoded['offerScreen'] == true;
     offerControl = decoded['offerControl'] == true;
-    forceRelay =
-        decoded['forceRelay'] is bool ? decoded['forceRelay'] as bool : false;
+    relayMode = decoded['relayMode'] is int
+        ? (decoded['relayMode'] as int).clamp(RelayMode.auto, RelayMode.direct)
+        : (decoded['forceRelay'] == true ? RelayMode.always : RelayMode.auto);
     screenMaxWidth =
         decoded['screenMaxWidth'] is int ? decoded['screenMaxWidth'] as int : 1920;
     screenMaxFps =
@@ -113,7 +134,7 @@ class AppStore {
       'offerStorage': offerStorage,
       'offerScreen': offerScreen,
       'offerControl': offerControl,
-      'forceRelay': forceRelay,
+      'relayMode': relayMode,
       'screenMaxWidth': screenMaxWidth,
       'screenMaxFps': screenMaxFps,
       'defaults': defaultPermissions.toList()..sort(),

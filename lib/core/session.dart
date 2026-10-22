@@ -96,14 +96,27 @@ class SessionOptions {
   SessionOptions({
     required this.server,
     required this.creds,
-    this.forceRelay = false,
+    this.relayMode = 0, // RelayMode.auto
     this.verbose = false,
   });
 
   final String server;
   final TopicCreds creds;
-  final bool forceRelay;
+
+  /// See RelayMode in app/store.dart: 0 auto, 1 always, 2 direct.
+  final int relayMode;
   final bool verbose;
+
+  /// Force the node through the relay (skip punching) only in "always" mode.
+  bool get forceRelay => relayMode == 1;
+
+  /// How a media datagram channel may fall back: direct-only in "direct" mode,
+  /// through the relay in "always", otherwise TCP (which the relay carries).
+  int get mediaFallback => relayMode == 2
+      ? ucFallbackNone
+      : relayMode == 1
+          ? ucFallbackRelay
+          : ucFallbackTcp;
 }
 
 /// A control-message handler: returns true when it consumed the message.
@@ -131,6 +144,10 @@ class Session {
   final snapshot = NodeSnapshot();
   SessionStatus status = SessionStatus.offline;
   String statusDetail = '';
+
+  /// The datagram fallback the current relay mode allows for media channels;
+  /// screen_viewer/host open their channels with it.
+  int mediaFallback = ucFallbackTcp;
   String? selfId;
 
   bool _published = false;
@@ -225,6 +242,7 @@ class Session {
 
   Future<void> start(SessionOptions options) async {
     await stop();
+    mediaFallback = options.mediaFallback;
     status = SessionStatus.connecting;
     statusDetail = 'Starting...';
     _notify();

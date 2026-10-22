@@ -157,7 +157,7 @@ class AppState extends ChangeNotifier {
       await session.start(SessionOptions(
         server: store.server,
         creds: creds,
-        forceRelay: store.forceRelay,
+        relayMode: store.relayMode,
       ));
       _applyLocalConfig();
     } on Object catch (e) {
@@ -187,7 +187,7 @@ class AppState extends ChangeNotifier {
     bool? offerStorage,
     bool? offerScreen,
     bool? offerControl,
-    bool? forceRelay,
+    int? relayMode,
     int? screenMaxWidth,
     int? screenMaxFps,
   }) async {
@@ -199,7 +199,7 @@ class AppState extends ChangeNotifier {
     if (offerStorage != null) store.offerStorage = offerStorage;
     if (offerScreen != null) store.offerScreen = offerScreen;
     if (offerControl != null) store.offerControl = offerControl;
-    if (forceRelay != null) store.forceRelay = forceRelay;
+    if (relayMode != null) store.relayMode = relayMode;
     if (screenMaxWidth != null) store.screenMaxWidth = screenMaxWidth;
     if (screenMaxFps != null) store.screenMaxFps = screenMaxFps;
     await store.save();

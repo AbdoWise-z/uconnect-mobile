@@ -14,7 +14,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import '../../uconnect/uconnect.dart' show ucFallbackTcp;
 import '../session.dart';
 
 /// One complete, in-order H.264 access unit for the decoder.
@@ -304,8 +303,8 @@ class ScreenViewer {
     cursorEmbedded = msg['cursorEmbedded'] == true;
     state = ViewerState.active;
     _lastUnitAt = DateTime.now();
-    // Open the media datagram channel; TCP fallback keeps it working on relay.
-    session.node?.openDatagrams(session.topicId, _dev!, ucFallbackTcp);
+    // Open the media datagram channel with the fallback the relay mode allows.
+    session.node?.openDatagrams(session.topicId, _dev!, session.mediaFallback);
     _reportTimer =
         Timer.periodic(const Duration(seconds: 1), (_) => _sendReport());
     _tick = Timer.periodic(const Duration(milliseconds: 15), (_) => _onTick());

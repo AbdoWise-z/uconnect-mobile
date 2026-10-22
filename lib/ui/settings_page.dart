@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../app/app_state.dart';
+import '../app/store.dart';
 import '../core/identity.dart';
 import '../core/session.dart';
 import '../core/permissions.dart';
@@ -169,20 +170,42 @@ class _SettingsPageState extends State<SettingsPage> {
           ],
         ),
       ],
-      SwitchListTile(
-        dense: true,
-        contentPadding: EdgeInsets.zero,
-        title: const Text('Force the relay', style: TextStyle(fontSize: 13)),
-        subtitle: const Text(
-            'Skip NAT punching; for networks where it is known to fail.',
-            style: TextStyle(fontSize: 11, color: UcColors.textSecondary)),
-        value: state.store.forceRelay,
-        onChanged: (on) async {
-          await state.saveSettings(forceRelay: on);
-          if (state.session.status != SessionStatus.offline) {
-            await state.connect();
-          }
-        },
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Relay', style: TextStyle(fontSize: 13)),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<int>(
+                showSelectedIcon: false,
+                style: ButtonStyle(
+                  visualDensity: VisualDensity.compact,
+                  textStyle: WidgetStateProperty.all(
+                      const TextStyle(fontSize: 12)),
+                ),
+                segments: [
+                  for (var i = 0; i < RelayMode.labels.length; i++)
+                    ButtonSegment<int>(
+                        value: i, label: Text(RelayMode.labels[i])),
+                ],
+                selected: {state.store.relayMode},
+                onSelectionChanged: (s) async {
+                  await state.saveSettings(relayMode: s.first);
+                  if (state.session.status != SessionStatus.offline) {
+                    await state.connect();
+                  }
+                },
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(RelayMode.blurbs[state.store.relayMode],
+                style: const TextStyle(
+                    fontSize: 11, color: UcColors.textSecondary)),
+          ],
+        ),
       ),
     ]);
   }

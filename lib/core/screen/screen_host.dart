@@ -11,7 +11,7 @@ import 'dart:typed_data';
 
 import '../permissions.dart';
 import '../session.dart';
-import '../../uconnect/uconnect.dart' show ucFallbackTcp, ucPathDirect;
+import '../../uconnect/uconnect.dart' show ucPathDirect;
 import 'remote_input.dart';
 import 'screen_capture.dart';
 
@@ -190,8 +190,9 @@ class ScreenHost {
     _history.clear();
     _historyOrder.clear();
 
-    // Open the media datagram channel toward the viewer (TCP fallback for relay).
-    session.node?.openDatagrams(session.topicId, dev, ucFallbackTcp);
+    // Open the media datagram channel toward the viewer with the fallback the
+    // current relay mode allows.
+    session.node?.openDatagrams(session.topicId, dev, session.mediaFallback);
 
     session.sendControl(dev, {
       't': 'scr.started',
