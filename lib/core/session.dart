@@ -333,7 +333,16 @@ class Session {
           _notify();
           return;
         }
-        selfId = node.self(_topic);
+        final newSelf = node.self(_topic);
+        // The server derives our dev_id from our address, so a network rebind
+        // gives us a new one and leaves the old registration lingering for a
+        // while. Remember the old id as a self-ghost so we skip it in lookups
+        // instead of connecting to our own former address.
+        if (selfId != null && selfId!.isNotEmpty && selfId != newSelf) {
+          _selfGhosts.add(selfId!);
+          peers.remove(selfId);
+        }
+        selfId = newSelf;
         log('Published as ${shortId(selfId ?? '?')}'
             '${node.reflexive != null ? ' (server sees ${node.reflexive})' : ''}');
       }
