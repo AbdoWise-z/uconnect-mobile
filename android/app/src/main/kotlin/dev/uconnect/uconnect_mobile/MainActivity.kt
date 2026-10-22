@@ -109,6 +109,13 @@ class MainActivity : FlutterActivity() {
             }
     }
 
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // The screen rotated while we may be sharing it: rebuild the capture at
+        // the new dimensions so the viewer sees it the right way up.
+        screenCapturer?.onRotation()
+    }
+
     @Suppress("DEPRECATION")
     private fun realScreenSize(): Pair<Int, Int> {
         val m = android.util.DisplayMetrics()

@@ -112,6 +112,12 @@ class ScreenCapturer(
         consent = null
     }
 
+    // Remembered so the capture can be rebuilt at the new size on rotation.
+    private var capReqW = 1280
+    private var capReqH = 720
+    private var capFps = 30
+    private var capBitrate = 4_000_000
+
     private fun start(reqW: Int, reqH: Int, fps: Int, bitrate: Int, result: MethodChannel.Result) {
         stop()
         val data = resultData
@@ -119,34 +125,32 @@ class ScreenCapturer(
             result.success(mapOf("width" to 0, "height" to 0))
             return
         }
-
-        // Match the phone's own aspect ratio within the requested bounds, and
-        // keep both dimensions even (H.264 requires it).
-        val metrics = DisplayMetrics()
-        @Suppress("DEPRECATION")
-        activity.windowManager.defaultDisplay.getRealMetrics(metrics)
-        val dpi = metrics.densityDpi
-        val sw = metrics.widthPixels
-        val sh = metrics.heightPixels
-        val scale = minOf(reqW.toFloat() / sw, reqH.toFloat() / sh, 1f)
-        val width = (sw * scale).toInt() and 0xFFFFFFFE.toInt()
-        val height = (sh * scale).toInt() and 0xFFFFFFFE.toInt()
+        capReqW = reqW; capReqH = reqH; capFps = fps; capBitrate = bitrate
 
         // Android 14+: the mediaProjection foreground service must be *running*
         // before getMediaProjection is called, and startForegroundService is
         // asynchronous -- so finish setup only once the service reports it is
         // in the foreground.
         ScreenCaptureService.start(activity.applicationContext) {
-            main.post {
-                val size = finishStart(data, width, height, dpi, fps, bitrate)
-                result.success(size)
-            }
+            main.post { result.success(finishStart(data)) }
         }
     }
 
-    private fun finishStart(
-        data: Intent, width: Int, height: Int, dpi: Int, fps: Int, bitrate: Int
-    ): Map<String, Any> {
+    // Fits the current screen within the requested bounds, keeping aspect and
+    // even dimensions (H.264 requires even width/height).
+    private data class Dim(val width: Int, val height: Int, val dpi: Int)
+
+    private fun currentDim(): Dim {
+        val m = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        activity.windowManager.defaultDisplay.getRealMetrics(m)
+        val scale = minOf(capReqW.toFloat() / m.widthPixels, capReqH.toFloat() / m.heightPixels, 1f)
+        val w = (m.widthPixels * scale).toInt() and 0xFFFFFFFE.toInt()
+        val h = (m.heightPixels * scale).toInt() and 0xFFFFFFFE.toInt()
+        return Dim(w, h, m.densityDpi)
+    }
+
+    private fun finishStart(data: Intent): Map<String, Any> {
         try {
             val mgr = activity.getSystemService(Context.MEDIA_PROJECTION_SERVICE)
                     as MediaProjectionManager
@@ -161,42 +165,70 @@ class ScreenCapturer(
                     main.post { this@ScreenCapturer.stop() }
                 }
             }, main)
-
-            val format = MediaFormat.createVideoFormat(
-                MediaFormat.MIMETYPE_VIDEO_AVC, width, height
-            ).apply {
-                setInteger(
-                    MediaFormat.KEY_COLOR_FORMAT,
-                    MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
-                )
-                setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
-                setInteger(MediaFormat.KEY_FRAME_RATE, fps)
-                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
-                setInteger(MediaFormat.KEY_LATENCY, 1)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    setInteger(
-                        MediaFormat.KEY_BITRATE_MODE,
-                        MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR
-                    )
-                }
-            }
-            val c = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-            c.setCallback(encoderCallback)
-            c.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            inputSurface = c.createInputSurface()
-            c.start()
-            codec = c
-
-            virtualDisplay = proj.createVirtualDisplay(
-                "uconnect-screen", width, height, dpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                inputSurface, null, main
-            )
-            return mapOf("width" to width, "height" to height)
+            val dim = currentDim()
+            buildEncoderAndDisplay(dim)
+            return mapOf("width" to dim.width, "height" to dim.height)
         } catch (t: Throwable) {
             channel.invokeMethod("error", t.message ?: "capture failed")
             stop()
             return mapOf("width" to 0, "height" to 0)
+        }
+    }
+
+    // (Re)creates the encoder, its input surface and the mirroring virtual
+    // display at the given size, keeping the existing MediaProjection.
+    private fun buildEncoderAndDisplay(dim: Dim) {
+        virtualDisplay?.release()
+        virtualDisplay = null
+        try {
+            codec?.stop(); codec?.release()
+        } catch (_: Throwable) {
+        }
+        inputSurface?.release()
+        codecConfig = null
+
+        val format = MediaFormat.createVideoFormat(
+            MediaFormat.MIMETYPE_VIDEO_AVC, dim.width, dim.height
+        ).apply {
+            setInteger(
+                MediaFormat.KEY_COLOR_FORMAT,
+                MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+            )
+            setInteger(MediaFormat.KEY_BIT_RATE, capBitrate)
+            setInteger(MediaFormat.KEY_FRAME_RATE, capFps)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+            setInteger(MediaFormat.KEY_LATENCY, 1)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                setInteger(
+                    MediaFormat.KEY_BITRATE_MODE,
+                    MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR
+                )
+            }
+        }
+        val c = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+        c.setCallback(encoderCallback)
+        c.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        inputSurface = c.createInputSurface()
+        c.start()
+        codec = c
+
+        virtualDisplay = projection?.createVirtualDisplay(
+            "uconnect-screen", dim.width, dim.height, dim.dpi,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            inputSurface, null, main
+        )
+    }
+
+    // The screen rotated (or its size changed): rebuild at the new dimensions
+    // and tell Dart the new size so the viewer can follow it.
+    fun onRotation() {
+        if (projection == null || codec == null) return
+        main.post {
+            try {
+                buildEncoderAndDisplay(currentDim())
+            } catch (t: Throwable) {
+                channel.invokeMethod("error", t.message ?: "re-capture failed")
+            }
         }
     }
 

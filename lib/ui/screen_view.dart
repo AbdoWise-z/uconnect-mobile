@@ -2,13 +2,30 @@
 // video in a Flutter texture, and (when the host grants control) forwards
 // pointer, scroll and keyboard events to the host as in.* messages. The host
 // applies them on its own machine; the phone only sends them.
+//
+// The video can be pinch-zoomed and panned, the phone can be rotated (or
+// forced full-screen landscape), and a keyboard bar sends typed text and the
+// common editing/navigation keys while controlling.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../app/app_state.dart';
 import '../core/screen/screen_decoder.dart';
 import '../core/screen/screen_viewer.dart';
 import 'theme.dart';
+
+// USB HID keyboard-page usages for the keys the keyboard bar can send.
+class _Hid {
+  static const enter = 0x28;
+  static const escape = 0x29;
+  static const backspace = 0x2A;
+  static const tab = 0x2B;
+  static const right = 0x4F;
+  static const left = 0x50;
+  static const down = 0x51;
+  static const up = 0x52;
+}
 
 class ScreenView extends StatefulWidget {
   const ScreenView({
@@ -37,11 +54,21 @@ class _ScreenViewState extends State<ScreenView> {
   int? _textureId;
   final _focusNode = FocusNode();
   final _keyboard = TextEditingController();
+  final _transform = TransformationController();
   int _buttons = 0;
+  bool _keyboardOn = false;
+  bool _fullscreen = false;
+  String _typed = '';
 
   @override
   void initState() {
     super.initState();
+    // Let the view rotate freely while open.
+    SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
     _viewer = ScreenViewer(widget.state.session);
     _decoder = ScreenDecoder();
     _viewer.changed.listen((_) async {
@@ -67,11 +94,18 @@ class _ScreenViewState extends State<ScreenView> {
 
   @override
   void dispose() {
+    SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _viewer.releaseInput();
     _viewer.dispose();
     _decoder.dispose();
     _focusNode.dispose();
     _keyboard.dispose();
+    _transform.dispose();
     super.dispose();
   }
 
@@ -80,32 +114,115 @@ class _ScreenViewState extends State<ScreenView> {
     return granted.contains('control.input');
   }
 
+  void _toggleKeyboard() {
+    setState(() => _keyboardOn = !_keyboardOn);
+    // The bar's field autofocuses when shown; just drop focus when hiding.
+    if (!_keyboardOn) _focusNode.unfocus();
+  }
+
+  void _toggleFullscreen() {
+    setState(() => _fullscreen = !_fullscreen);
+    if (_fullscreen) {
+      SystemChrome.setPreferredOrientations(const [
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    } else {
+      SystemChrome.setPreferredOrientations(const [
+        DeviceOrientation.portraitUp,
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (_fullscreen && _viewer.state == ViewerState.active) {
+      // No chrome in full-screen: a floating exit/keyboard control instead.
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: Stack(
+          children: [
+            Positioned.fill(child: _body()),
+            SafeArea(
+              child: Align(
+                alignment: Alignment.topRight,
+                child: _floatingControls(),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     return Scaffold(
       backgroundColor: Colors.black,
+      resizeToAvoidBottomInset: true,
       appBar: AppBar(
         title: Text('${widget.devName} — screen',
             style: const TextStyle(fontSize: 15)),
-        actions: [
-          if (_viewer.active && _canControl)
-            IconButton(
-              tooltip: _viewer.controlOn ? 'Stop controlling' : 'Take control',
-              icon: Icon(_viewer.controlOn
-                  ? Icons.mouse
-                  : Icons.mouse_outlined),
-              color: _viewer.controlOn ? UcColors.accent : null,
-              onPressed: () => _viewer.requestControl(!_viewer.controlOn),
-            ),
-          if (_viewer.active && _viewer.controlOn)
-            IconButton(
-              tooltip: 'Keyboard',
-              icon: const Icon(Icons.keyboard),
-              onPressed: () => _focusNode.requestFocus(),
-            ),
+        actions: _appBarActions(),
+      ),
+      body: Column(
+        children: [
+          Expanded(child: _body()),
+          if (_keyboardOn && _viewer.controlOn) _keyboardBar(),
         ],
       ),
-      body: _body(),
+    );
+  }
+
+  List<Widget> _appBarActions() {
+    return [
+      if (_viewer.active)
+        IconButton(
+          tooltip: 'Full screen',
+          icon: const Icon(Icons.fullscreen),
+          onPressed: _toggleFullscreen,
+        ),
+      if (_viewer.active && _canControl)
+        IconButton(
+          tooltip: _viewer.controlOn ? 'Stop controlling' : 'Take control',
+          icon: Icon(_viewer.controlOn ? Icons.mouse : Icons.mouse_outlined),
+          color: _viewer.controlOn ? UcColors.accent : null,
+          onPressed: () => _viewer.requestControl(!_viewer.controlOn),
+        ),
+      if (_viewer.active && _viewer.controlOn)
+        IconButton(
+          tooltip: 'Keyboard',
+          icon: Icon(_keyboardOn ? Icons.keyboard_hide : Icons.keyboard),
+          color: _keyboardOn ? UcColors.accent : null,
+          onPressed: _toggleKeyboard,
+        ),
+    ];
+  }
+
+  Widget _floatingControls() {
+    return Container(
+      margin: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(24),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (_canControl)
+            IconButton(
+              tooltip: _viewer.controlOn ? 'Stop controlling' : 'Take control',
+              icon: Icon(_viewer.controlOn ? Icons.mouse : Icons.mouse_outlined,
+                  color: _viewer.controlOn ? UcColors.accent : Colors.white),
+              onPressed: () => _viewer.requestControl(!_viewer.controlOn),
+            ),
+          IconButton(
+            tooltip: 'Exit full screen',
+            icon: const Icon(Icons.fullscreen_exit, color: Colors.white),
+            onPressed: _toggleFullscreen,
+          ),
+        ],
+      ),
     );
   }
 
@@ -170,44 +287,28 @@ class _ScreenViewState extends State<ScreenView> {
     final w = _decoder.size.width > 0 ? _decoder.size.width : _viewer.width;
     final h = _decoder.size.height > 0 ? _decoder.size.height : _viewer.height;
     final aspect = (w > 0 && h > 0) ? w / h : 16 / 9;
+    final controlling = _canControl && _viewer.controlOn;
 
-    final video = AspectRatio(
-      aspectRatio: aspect,
-      child: Texture(textureId: id),
-    );
+    final content = controlling
+        ? _controlSurface(id, aspect)
+        : AspectRatio(aspectRatio: aspect, child: Texture(textureId: id));
 
-    // Hidden text field that drives in.text / in.key while control is on.
-    final keyboardSink = SizedBox(
-      width: 0,
-      height: 0,
-      child: Offstage(
-        offstage: true,
-        child: TextField(
-          controller: _keyboard,
-          focusNode: _focusNode,
-          autocorrect: false,
-          enableSuggestions: false,
-          keyboardType: TextInputType.text,
-          onChanged: (v) {
-            if (v.isNotEmpty) {
-              _viewer.sendText(v);
-              _keyboard.clear();
-            }
-          },
-          onSubmitted: (_) => _viewer.sendKey(0x28, true), // HID Enter
-        ),
-      ),
+    // Pinch to zoom and pan. While controlling, a single finger drives the
+    // pointer (panEnabled false) and two fingers still zoom/pan.
+    final zoomable = InteractiveViewer(
+      transformationController: _transform,
+      minScale: 1,
+      maxScale: 6,
+      panEnabled: !controlling,
+      scaleEnabled: true,
+      clipBehavior: Clip.hardEdge,
+      child: content,
     );
 
     return Stack(
       children: [
         Positioned.fill(child: Container(color: Colors.black)),
-        Center(
-          child: _canControl && _viewer.controlOn
-              ? _controlSurface(id, aspect)
-              : video,
-        ),
-        keyboardSink,
+        Center(child: zoomable),
         if (_viewer.statusDetail.isNotEmpty)
           Positioned(
             left: 0,
@@ -221,14 +322,88 @@ class _ScreenViewState extends State<ScreenView> {
                   style: const TextStyle(color: Colors.white70, fontSize: 12)),
             ),
           ),
-        if (_viewer.active && _canControl && !_viewer.controlOn)
-          Positioned(
-            left: 12,
-            right: 12,
-            bottom: 12,
-            child: _hintBar(),
-          ),
+        if (_viewer.active && _canControl && !_viewer.controlOn && !_fullscreen)
+          Positioned(left: 12, right: 12, bottom: 12, child: _hintBar()),
       ],
+    );
+  }
+
+  // Sends what changed in the text field as in.text (inserted characters) and
+  // backspace keys (deletions), so typing on the soft keyboard reaches the host.
+  void _onTyped(String v) {
+    var common = 0;
+    final max = v.length < _typed.length ? v.length : _typed.length;
+    while (common < max && v[common] == _typed[common]) {
+      common++;
+    }
+    final deletes = _typed.length - common;
+    for (var i = 0; i < deletes; i++) {
+      _viewer.sendKey(_Hid.backspace, true);
+    }
+    final added = v.substring(common);
+    if (added.isNotEmpty) _viewer.sendText(added);
+    _typed = v;
+    // Keep the field from growing without bound.
+    if (v.length > 240) {
+      _keyboard.clear();
+      _typed = '';
+    }
+  }
+
+  Widget _keyboardBar() {
+    Widget key(String label, int usage, {double width = 48}) => Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 3),
+          child: SizedBox(
+            width: width,
+            child: OutlinedButton(
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                foregroundColor: UcColors.text,
+                side: const BorderSide(color: UcColors.inputBorder),
+              ),
+              onPressed: () => _viewer.sendKey(usage, true),
+              child: Text(label, style: const TextStyle(fontSize: 13)),
+            ),
+          ),
+        );
+    return Material(
+      color: UcColors.panel,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            child: Row(
+              children: [
+                key('Esc', _Hid.escape),
+                key('Tab', _Hid.tab),
+                key('⌫', _Hid.backspace),
+                key('↵', _Hid.enter),
+                key('←', _Hid.left),
+                key('→', _Hid.right),
+                key('↑', _Hid.up),
+                key('↓', _Hid.down),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+            child: TextField(
+              controller: _keyboard,
+              focusNode: _focusNode,
+              autocorrect: false,
+              enableSuggestions: false,
+              autofocus: true,
+              decoration: const InputDecoration(
+                isDense: true,
+                hintText: 'Type to send to the other device…',
+              ),
+              onChanged: _onTyped,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -254,7 +429,8 @@ class _ScreenViewState extends State<ScreenView> {
       );
 
   // The Listener sits exactly on the letterboxed video (inside the
-  // AspectRatio), so a touch maps straight to a normalized position.
+  // AspectRatio), so a touch maps straight to a normalized position regardless
+  // of the zoom/pan transform applied by the InteractiveViewer around it.
   Widget _controlSurface(int textureId, double aspect) {
     return AspectRatio(
       aspectRatio: aspect,

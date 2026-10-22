@@ -85,6 +85,10 @@ class ScreenDecoder(
             )
             fmt.setByteBuffer("csd-0", ByteBuffer.wrap(sps))
             fmt.setByteBuffer("csd-1", ByteBuffer.wrap(pps))
+            // Adaptive playback: let the resolution change within the stream
+            // (e.g. when the sharing device rotates) without reconfiguring.
+            fmt.setInteger(MediaFormat.KEY_MAX_WIDTH, 2720)
+            fmt.setInteger(MediaFormat.KEY_MAX_HEIGHT, 2720)
             try {
                 val c = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
                 c.setCallback(callback)
