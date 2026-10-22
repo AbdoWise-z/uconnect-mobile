@@ -2,6 +2,7 @@ package dev.uconnect.uconnect_mobile
 
 import android.media.MediaCodec
 import android.media.MediaFormat
+import android.os.Build
 import android.view.Surface
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodChannel
@@ -89,6 +90,15 @@ class ScreenDecoder(
             // (e.g. when the sharing device rotates) without reconfiguring.
             fmt.setInteger(MediaFormat.KEY_MAX_WIDTH, 2720)
             fmt.setInteger(MediaFormat.KEY_MAX_HEIGHT, 2720)
+            // Real-time, low-latency decode: with this the decoder outputs each
+            // picture as soon as it is decoded instead of holding a reorder
+            // queue, so frames reach the texture on a steady cadence. A backed-up
+            // reorder queue is what made motion look torn even at low resolution.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                fmt.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+            }
+            fmt.setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE.toInt())
+            fmt.setInteger(MediaFormat.KEY_PRIORITY, 0) // 0 = real-time
             try {
                 val c = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
                 c.setCallback(callback)
