@@ -455,6 +455,13 @@ class ScreenViewer {
         _askKeyframe();
       }
     }
+    // Gated with no keyframe in hand (e.g. the host's first keyframe was lost
+    // while the media channel was still opening): keep asking for one. This is
+    // rate limited to once per 200 ms inside _askKeyframe.
+    if (_gated && _assemblies.isEmpty &&
+        now.difference(_lastUnitAt) > const Duration(milliseconds: 300)) {
+      _askKeyframe();
+    }
     // No decoded picture for 8 s after start: tell the user (7.3).
     if (now.difference(_lastUnitAt) > const Duration(seconds: 8) &&
         error.isEmpty &&

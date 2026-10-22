@@ -41,7 +41,7 @@ class UconnectService : Service() {
         val notification: Notification = Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("uConnect")
             .setContentText(text)
-            .setSmallIcon(applicationInfo.icon)
+            .setSmallIcon(R.drawable.ic_stat_uconnect)
             .setContentIntent(pending)
             .setOngoing(true)
             .build()
@@ -60,10 +60,11 @@ class UconnectService : Service() {
             val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             if (mgr.getNotificationChannel(CHANNEL_ID) == null) {
                 val channel = NotificationChannel(
-                    CHANNEL_ID, "Connection",
+                    CHANNEL_ID, "Running in the background",
                     NotificationManager.IMPORTANCE_LOW
                 )
-                channel.description = "Shown while uConnect keeps your devices connected."
+                channel.description =
+                    "Lets uConnect stay connected to your devices while it is in the background."
                 channel.setShowBadge(false)
                 mgr.createNotificationChannel(channel)
             }

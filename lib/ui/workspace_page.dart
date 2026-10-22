@@ -50,7 +50,12 @@ class _WorkspacePageState extends State<WorkspacePage> {
           child: _StatusBar(state: state),
         ),
       ),
-      body: body,
+      body: Column(
+        children: [
+          if (state.screenHost.sharing) _SharingBar(state: state),
+          Expanded(child: body),
+        ],
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
         onDestinationSelected: (i) => setState(() => _tab = i),
@@ -62,6 +67,37 @@ class _WorkspacePageState extends State<WorkspacePage> {
           NavigationDestination(
               icon: Icon(Icons.settings_outlined), label: 'Settings'),
         ],
+      ),
+    );
+  }
+}
+
+class _SharingBar extends StatelessWidget {
+  const _SharingBar({required this.state});
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final name = state.screenHost.viewerName ?? 'a device';
+    return Material(
+      color: UcColors.accent,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        child: Row(
+          children: [
+            const Icon(Icons.screen_share, size: 18, color: Colors.white),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text('Sharing your screen to $name',
+                  style: const TextStyle(color: Colors.white, fontSize: 13)),
+            ),
+            TextButton(
+              onPressed: () => state.screenHost.stop(),
+              style: TextButton.styleFrom(foregroundColor: Colors.white),
+              child: const Text('Stop'),
+            ),
+          ],
+        ),
       ),
     );
   }

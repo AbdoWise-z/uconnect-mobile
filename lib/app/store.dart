@@ -45,6 +45,7 @@ class AppStore {
   String topicUri = '';
   String deviceName = '';
   bool offerStorage = true;
+  bool offerScreen = false;
   bool forceRelay = false;
   Set<String> defaultPermissions = {};
   final trusted = <String, TrustedDevice>{}; // key hex -> device
@@ -67,6 +68,7 @@ class AppStore {
     offerStorage = decoded['offerStorage'] is bool
         ? decoded['offerStorage'] as bool
         : true;
+    offerScreen = decoded['offerScreen'] == true;
     forceRelay =
         decoded['forceRelay'] is bool ? decoded['forceRelay'] as bool : false;
     defaultPermissions = {
@@ -98,6 +100,7 @@ class AppStore {
       'topic': topicUri,
       'deviceName': deviceName,
       'offerStorage': offerStorage,
+      'offerScreen': offerScreen,
       'forceRelay': forceRelay,
       'defaults': defaultPermissions.toList()..sort(),
       'trusted': [for (final t in trusted.values) t.toJson()],

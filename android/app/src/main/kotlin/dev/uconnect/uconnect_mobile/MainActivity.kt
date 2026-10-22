@@ -1,6 +1,7 @@
 package dev.uconnect.uconnect_mobile
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -27,13 +28,18 @@ class MainActivity : FlutterActivity() {
     }
 
     private var screenDecoder: ScreenDecoder? = null
+    private var screenCapturer: ScreenCapturer? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        // Decodes a shared screen's H.264 into a Flutter texture.
+        // Decodes a shared screen's H.264 into a Flutter texture (watching).
         screenDecoder = ScreenDecoder(
             flutterEngine.dartExecutor.binaryMessenger,
             flutterEngine.renderer,
+        )
+        // Captures and encodes this device's screen (sharing to a peer).
+        screenCapturer = ScreenCapturer(
+            this, flutterEngine.dartExecutor.binaryMessenger
         )
         // Dart starts the foreground service when a session connects and stops
         // it when the session ends; see lib/app/background.dart.
@@ -52,5 +58,13 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    @Deprecated("deprecated base method; still the delivery path for the capture-consent result")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == ScreenCapturer.CONSENT_REQUEST) {
+            screenCapturer?.onConsentResult(resultCode, data)
+        }
     }
 }

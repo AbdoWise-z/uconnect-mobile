@@ -207,6 +207,17 @@ class _SettingsPageState extends State<SettingsPage> {
         value: state.store.offerStorage,
         onChanged: (on) => state.saveSettings(offerStorage: on),
       ),
+      SwitchListTile(
+        dense: true,
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Offer screen sharing', style: TextStyle(fontSize: 13)),
+        subtitle: const Text(
+            'Let a trusted device you grant it watch this screen. Android asks '
+            'to confirm screen capture each time.',
+            style: TextStyle(fontSize: 11, color: UcColors.textSecondary)),
+        value: state.store.offerScreen,
+        onChanged: (on) => state.saveSettings(offerScreen: on),
+      ),
       ListTile(
         contentPadding: EdgeInsets.zero,
         leading: const Icon(Icons.folder_outlined, color: UcColors.warning),

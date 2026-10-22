@@ -25,6 +25,7 @@ class UConnectApp extends StatelessWidget {
     return MaterialApp(
       title: 'uConnect',
       theme: ucTheme(),
+      navigatorKey: state.navigatorKey,
       debugShowCheckedModeBanner: false,
       home: ListenableBuilder(
         listenable: state,

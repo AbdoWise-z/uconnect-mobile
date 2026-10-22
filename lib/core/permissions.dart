@@ -73,7 +73,7 @@ const List<PermissionInfo> permissionTable = [
       service: 'screen',
       label: 'View',
       description: 'Watch this device\'s screen.',
-      available: false,
+      available: true,
       trustedOnly: true),
   PermissionInfo(
       id: Perm.screenDirect,
@@ -81,7 +81,7 @@ const List<PermissionInfo> permissionTable = [
       label: 'Without asking',
       description:
           'View the screen without a consent prompt. Trusted devices only.',
-      available: false,
+      available: true,
       trustedOnly: true),
   PermissionInfo(
       id: Perm.controlInput,

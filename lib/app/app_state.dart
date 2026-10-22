@@ -6,15 +6,18 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 
 import '../core/identity.dart';
 import '../core/permissions.dart';
+import '../core/screen/screen_capture.dart';
+import '../core/screen/screen_host.dart';
 import '../core/session.dart';
 import '../core/storage/storage_client.dart';
 import '../core/storage/storage_offerer.dart';
 import '../core/wire.dart';
 import '../uconnect/uconnect.dart';
+import '../ui/theme.dart';
 import 'background.dart';
 import 'store.dart';
 
@@ -29,18 +32,23 @@ class AppState extends ChangeNotifier {
   final session = Session();
   late final storageClient = StorageClient(session);
   late final storageOfferer = StorageOfferer(session);
+  final capture = CaptureController();
+  late final ScreenHost screenHost;
+
+  /// Set by the app shell so the screen-consent prompt has a context.
+  final navigatorKey = GlobalKey<NavigatorState>();
 
   bool loaded = false;
   String startError = '';
   final _subs = <StreamSubscription<void>>[];
   final _background = BackgroundKeepAlive();
-  SessionStatus _lastStatus = SessionStatus.offline;
 
   String get downloadsDir => '$dataDir${Platform.pathSeparator}downloads';
   String get sharedDir => '$dataDir${Platform.pathSeparator}shared';
 
   Future<void> init() async {
     await store.load();
+    screenHost = ScreenHost(session, capture, askConsent: _askScreenConsent);
     identity =
         await Identity.loadOrCreate('$dataDir${Platform.pathSeparator}identity');
     session.identity = identity;
@@ -58,10 +66,12 @@ class AppState extends ChangeNotifier {
       store.shares = [SharedFolder('Shared', sharedDir)];
     }
     _applyLocalConfig();
+    screenHost.offered = store.offerScreen;
     _subs.add(session.changed.listen((_) {
       _syncBackgroundService();
       notifyListeners();
     }));
+    _subs.add(screenHost.changed.listen((_) => notifyListeners()));
     _subs.add(storageClient.transfersChanged.listen((_) => notifyListeners()));
     _subs.add(storageOfferer.activityChanged.listen((_) => notifyListeners()));
     loaded = true;
@@ -74,6 +84,7 @@ class AppState extends ChangeNotifier {
   void _applyLocalConfig() {
     storageOfferer.offered = store.offerStorage;
     storageOfferer.shares = store.shares;
+    screenHost.offered = store.offerScreen && capture.supported;
     session.setLocalHello(Hello(
       name: store.deviceName,
       os: Platform.isAndroid
@@ -81,7 +92,10 @@ class AppState extends ChangeNotifier {
           : Platform.isIOS
               ? 'ios'
               : Platform.operatingSystem,
-      services: [if (store.offerStorage) Services.storage],
+      services: [
+        if (store.offerStorage) Services.storage,
+        if (store.offerScreen && capture.supported) Services.screen,
+      ],
     ));
     session.setAccessPolicy(AccessPolicy(
       defaults: normalizePermissions(store.defaultPermissions),
@@ -94,24 +108,30 @@ class AppState extends ChangeNotifier {
 
   bool get connected => session.status == SessionStatus.online;
 
+  String _lastBgText = '';
+
   // A session that is up, connecting or retrying holds the foreground service
   // so the OS keeps the process alive in the background; offline/error drop it.
   void _syncBackgroundService() {
     final status = session.status;
-    if (status == _lastStatus) return;
-    _lastStatus = status;
-    switch (status) {
-      case SessionStatus.online:
-        final n = session.peers.values.where((p) => p.stateCode == 3).length;
-        _background.start(n == 0
-            ? 'Connected — no other devices yet'
-            : 'Connected to $n device${n == 1 ? '' : 's'}');
-      case SessionStatus.connecting:
-      case SessionStatus.reconnecting:
-        _background.start('Connecting…');
-      case SessionStatus.offline:
-      case SessionStatus.error:
-        _background.stop();
+    final text = switch (status) {
+      SessionStatus.online => () {
+          final n = session.peers.values.where((p) => p.stateCode == 3).length;
+          return n == 0
+              ? 'Connected · waiting for your devices'
+              : 'Connected to $n device${n == 1 ? '' : 's'}';
+        }(),
+      SessionStatus.connecting ||
+      SessionStatus.reconnecting =>
+        'Connecting to your devices…',
+      SessionStatus.offline || SessionStatus.error => '',
+    };
+    if (text.isEmpty) {
+      _lastBgText = '';
+      _background.stop();
+    } else if (text != _lastBgText) {
+      _lastBgText = text;
+      _background.start(text);
     }
   }
 
@@ -155,6 +175,7 @@ class AppState extends ChangeNotifier {
     String? topicUri,
     String? deviceName,
     bool? offerStorage,
+    bool? offerScreen,
     bool? forceRelay,
   }) async {
     if (server != null) store.server = server.trim();
@@ -163,10 +184,40 @@ class AppState extends ChangeNotifier {
       store.deviceName = deviceName.trim();
     }
     if (offerStorage != null) store.offerStorage = offerStorage;
+    if (offerScreen != null) store.offerScreen = offerScreen;
     if (forceRelay != null) store.forceRelay = forceRelay;
     await store.save();
     _applyLocalConfig();
     notifyListeners();
+  }
+
+  // Asks the user to allow a peer to watch this screen (unless screen.direct).
+  Future<bool> _askScreenConsent(String dev, String name) async {
+    final context = navigatorKey.currentContext;
+    if (context == null) return false;
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Share your screen?'),
+        content: Text(
+          '"$name" is asking to watch this device\'s screen. While you share, '
+          'it sees everything on your screen.',
+          style: const TextStyle(color: UcColors.text),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Deny'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Share'),
+          ),
+        ],
+      ),
+    );
+    return ok ?? false;
   }
 
   // --- trust and permissions -------------------------------------------------
@@ -215,6 +266,7 @@ class AppState extends ChangeNotifier {
       unawaited(s.cancel());
     }
     unawaited(_background.stop());
+    unawaited(screenHost.dispose());
     storageOfferer.dispose();
     unawaited(session.dispose());
     super.dispose();
