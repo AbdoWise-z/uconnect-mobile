@@ -134,7 +134,7 @@ class _ScreenViewState extends State<ScreenView> {
       if (mounted) setState(() {});
     });
     _statsTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
-      if (!_showStats || !mounted) return;
+      if (!mounted || !_viewer.active) return;
       final render = await _decoder.stats();
       if (mounted) setState(() => _render = render);
     });
@@ -207,6 +207,7 @@ class _ScreenViewState extends State<ScreenView> {
     _viewer.releaseInput();
     _statsTimer?.cancel();
     _bufferTimer?.cancel();
+    _hideControls?.cancel();
     _viewer.dispose();
     _decoder.dispose();
     _focusNode.dispose();
@@ -227,9 +228,56 @@ class _ScreenViewState extends State<ScreenView> {
     if (!_keyboardOn) _focusNode.unfocus();
   }
 
+  // Full-screen controls show for a few seconds after they are used, then
+  // give way to a handle at the corner.
+  bool _controlsShown = true;
+  Timer? _hideControls;
+
+  void _showControls() {
+    _hideControls?.cancel();
+    setState(() => _controlsShown = true);
+    _hideControls = Timer(const Duration(seconds: 4), () {
+      if (mounted) setState(() => _controlsShown = false);
+    });
+  }
+
+  Widget _controlsHandle() {
+    return Padding(
+      padding: const EdgeInsets.all(8),
+      child: Material(
+        color: Colors.black38,
+        shape: const StadiumBorder(),
+        child: InkWell(
+          customBorder: const StadiumBorder(),
+          onTap: _showControls,
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            child: Icon(Icons.more_horiz, size: 18, color: Colors.white70),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // One line on what the stream is doing: size, frames shown, rate, lag.
+  String _liveLine() {
+    String n(Object? v, [int digits = 0]) => v is num ? v.toStringAsFixed(digits) : '–';
+    final size = _decoder.size;
+    final host = _viewer.hostStats;
+    final parts = <String>[
+      if (size.width > 0) '${size.width.toInt()}×${size.height.toInt()}',
+      '${n(_render['rendered'])} fps',
+      '${n(_viewer.kbps / 1000, 1)} Mbit/s',
+      if (host['lagMs'] is num) 'lag ${n(host['lagMs'])} ms',
+      if (_viewer.lossPct >= 0.5) 'loss ${n(_viewer.lossPct, 1)}%',
+    ];
+    return parts.join(' · ');
+  }
+
   void _toggleFullscreen() {
     setState(() => _fullscreen = !_fullscreen);
     if (_fullscreen) {
+      _showControls();
       SystemChrome.setPreferredOrientations(const [
         DeviceOrientation.landscapeLeft,
         DeviceOrientation.landscapeRight,
@@ -248,7 +296,8 @@ class _ScreenViewState extends State<ScreenView> {
   @override
   Widget build(BuildContext context) {
     if (_fullscreen && _viewer.state == ViewerState.active) {
-      // No chrome in full-screen: a floating exit/keyboard control instead.
+      // No chrome in full screen: floating controls that hide themselves a
+      // few seconds after they were last used, behind a small handle.
       return Scaffold(
         backgroundColor: Colors.black,
         body: Stack(
@@ -257,7 +306,7 @@ class _ScreenViewState extends State<ScreenView> {
             SafeArea(
               child: Align(
                 alignment: Alignment.topRight,
-                child: _floatingControls(),
+                child: _controlsShown ? _floatingControls() : _controlsHandle(),
               ),
             ),
           ],
@@ -268,8 +317,17 @@ class _ScreenViewState extends State<ScreenView> {
       backgroundColor: Colors.black,
       resizeToAvoidBottomInset: true,
       appBar: AppBar(
-        title: Text('${widget.devName} — ${widget.camera ? 'camera' : 'screen'}',
-            style: const TextStyle(fontSize: 15)),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('${widget.devName} — ${widget.camera ? 'camera' : 'screen'}',
+                style: const TextStyle(fontSize: 15)),
+            if (_viewer.active)
+              Text(_liveLine(),
+                  style: TextStyle(fontSize: 11.5, color: UcColors.textSecondary)),
+          ],
+        ),
         actions: _appBarActions(),
       ),
       body: Column(
@@ -360,21 +418,23 @@ class _ScreenViewState extends State<ScreenView> {
           Widget row<T>(String title, List<T> values, T current, String Function(T) label,
                   void Function(T) pick) =>
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 4, 20, 10),
+                padding: const EdgeInsets.fromLTRB(16, 2, 16, 6),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(title.toUpperCase(),
                         style: TextStyle(
-                            fontSize: 11.5,
+                            fontSize: 11,
                             letterSpacing: 0.8,
                             fontWeight: FontWeight.w600,
                             color: UcColors.textSecondary)),
-                    const SizedBox(height: 6),
-                    Wrap(spacing: 8, runSpacing: 6, children: [
+                    const SizedBox(height: 4),
+                    Wrap(spacing: 6, runSpacing: 4, children: [
                       for (final v in values)
                         ChoiceChip(
-                          label: Text(label(v)),
+                          label: Text(label(v), style: const TextStyle(fontSize: 13)),
+                          labelPadding: const EdgeInsets.symmetric(horizontal: 6),
+                          visualDensity: VisualDensity.compact,
                           selected: v == current,
                           onSelected: (_) async {
                             pick(v);
@@ -399,7 +459,9 @@ class _ScreenViewState extends State<ScreenView> {
                   row<int>('Playback buffer', ViewQuality.buffers, store.viewBufferMs,
                       ViewQuality.bufferLabel, (v) => _ask(bufferMs: v)),
                   SwitchListTile(
-                    title: const Text('Statistics'),
+                    dense: true,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                    title: const Text('Statistics overlay'),
                     subtitle: const Text('How the stream keeps up, on both devices'),
                     value: _showStats,
                     onChanged: (on) {
@@ -459,6 +521,11 @@ class _ScreenViewState extends State<ScreenView> {
   }
 
   Widget _floatingControls() {
+    // Any use keeps the controls up a while longer.
+    void used(VoidCallback action) {
+      action();
+      _showControls();
+    }
     return Container(
       margin: const EdgeInsets.all(8),
       decoration: BoxDecoration(
@@ -471,18 +538,31 @@ class _ScreenViewState extends State<ScreenView> {
           if (widget.camera && _viewer.cameras.length > 1)
             _cameraMenu(color: Colors.white),
           _qualityMenu(color: Colors.white),
+          IconButton(
+            tooltip: 'Statistics',
+            icon: Icon(_showStats ? Icons.insights : Icons.insights_outlined,
+                color: _showStats ? UcColors.accent : Colors.white),
+            onPressed: () => used(() => setState(() => _showStats = !_showStats)),
+          ),
           if (widget.camera)
             IconButton(
               tooltip: 'Rotate',
               icon: const Icon(Icons.screen_rotation, color: Colors.white),
-              onPressed: () => setState(() => _rotation = (_rotation + 1) % 4),
+              onPressed: () => used(() => setState(() => _rotation = (_rotation + 1) % 4)),
             ),
           if (_canControl)
             IconButton(
               tooltip: _viewer.controlOn ? 'Stop controlling' : 'Take control',
               icon: Icon(_viewer.controlOn ? Icons.mouse : Icons.mouse_outlined,
                   color: _viewer.controlOn ? UcColors.accent : Colors.white),
-              onPressed: () => _viewer.requestControl(!_viewer.controlOn),
+              onPressed: () => used(() => _viewer.requestControl(!_viewer.controlOn)),
+            ),
+          if (_viewer.controlOn)
+            IconButton(
+              tooltip: 'Keyboard',
+              icon: Icon(_keyboardOn ? Icons.keyboard_hide : Icons.keyboard,
+                  color: _keyboardOn ? UcColors.accent : Colors.white),
+              onPressed: () => used(_toggleKeyboard),
             ),
           IconButton(
             tooltip: 'Exit full screen',
