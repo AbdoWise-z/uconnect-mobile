@@ -185,4 +185,27 @@ void main() {
     expect(t.state, TransferState.failed);
     expect(t.error, contains('forbidden'));
   }, timeout: const Timeout(Duration(minutes: 1)));
+
+  test('special rules add to the defaults unless they are an exception', () async {
+    String? devB() {
+      for (final p in a.peers.values) {
+        if (p.stateCode == 3 && p.identityState == 'verified') return p.devId;
+      }
+      return null;
+    }
+
+    await waitFor(() => devB() != null, reason: 'B proven at A');
+    final key = a.peers[devB()!]!.identityKey;
+    a.setAccessPolicy(AccessPolicy(
+        defaults: {Perm.storageObserve}, special: {key: {Perm.storageRead}}));
+    final (perms, source, from) = a.resolvePermissions(devB()!);
+    expect(perms, {Perm.storageObserve, Perm.storageRead});
+    expect(source, 'device');
+    expect(from, {Perm.storageRead: 'device', Perm.storageObserve: 'default'});
+    a.setAccessPolicy(AccessPolicy(
+        defaults: {Perm.storageObserve},
+        special: {key: {Perm.storageRead}},
+        exceptions: {key}));
+    expect(a.permissionsFor(devB()!), {Perm.storageRead});
+  }, timeout: const Timeout(Duration(minutes: 1)));
 }

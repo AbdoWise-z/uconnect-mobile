@@ -20,14 +20,18 @@
   invite link. Scan a computer's invite QR code with the camera and uConnect
   opens on it (`uconn://` links), or paste the link. Leave a topic at any
   time; the connect page offers to rejoin it.
-- **Your rules, per device.** Every service is behind a permission, and for
-  each device the first of these applies:
+- **Your rules, per device.** Every service is behind a permission, and each
+  device gets what all of these grant it, together:
   1. its **special rules** — permissions of its own, added after checking its
      fingerprint;
   2. this topic's **network rules** — ordered address patterns such as
      `m.m.m.x` (your own subnet) or `100.x.x.x`, matched against the address
-     its direct connection comes from;
+     its direct connection comes from (the first match applies);
   3. your **defaults**.
+
+  The device's page marks which of them grants each permission. Make its
+  special rules an **exception** to apply only those, for example to give it
+  less than the defaults.
 
   Rules are per topic, and a device can copy another device's rules for quick
   setup on a trusted network.

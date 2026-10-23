@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../core/network_rules.dart';
+import '../core/permissions.dart';
 import '../core/sync/sync_folder.dart';
 
 import '../core/storage/storage_offerer.dart';
@@ -32,32 +33,41 @@ class RelayMode {
 }
 
 /// Special rules: permissions set for one device, by the public key it proves
-/// (see Session.resolvePermissions). They come before network rules and the
-/// defaults.
+/// (see Session.resolvePermissions). They add to what its network rule and
+/// the defaults grant it, unless they are an exception: then only they apply.
 class SpecialRules {
-  SpecialRules(this.keyHex, this.name, this.permissions);
+  SpecialRules(this.keyHex, this.name, this.permissions, {this.exception = false});
   final String keyHex;
   String name; // what it called itself when they were added; a label only
   Set<String> permissions;
+  bool exception;
 
   Map<String, Object?> toJson() => {
         'key': keyHex,
         'name': name,
         'perms': permissions.toList()..sort(),
+        'exception': exception,
       };
 
-  static SpecialRules? fromJson(Object? v) {
+  /// [defaults] decides rules saved before they added up (no "exception"):
+  /// they stay an exception where that keeps a default away from the device.
+  static SpecialRules? fromJson(Object? v, {Set<String> defaults = const {}}) {
     if (v is! Map) return null;
     final key = v['key'];
     if (key is! String) return null;
+    final perms = <String>{
+      if (v['perms'] is List)
+        for (final p in v['perms'] as List)
+          if (p is String) p
+    };
+    final normalized = normalizePermissions(perms);
     return SpecialRules(
       key,
       v['name'] is String ? v['name'] as String : '',
-      {
-        if (v['perms'] is List)
-          for (final p in v['perms'] as List)
-            if (p is String) p
-      },
+      perms,
+      exception: v['exception'] is bool
+          ? v['exception'] as bool
+          : normalizePermissions(defaults).any((p) => !normalized.contains(p)),
     );
   }
 }
@@ -152,7 +162,7 @@ class AppStore {
     for (final list in [decoded['trusted'], decoded['special']]) {
       if (list is! List) continue;
       for (final t in list) {
-        final d = SpecialRules.fromJson(t);
+        final d = SpecialRules.fromJson(t, defaults: defaultPermissions);
         if (d != null) special[d.keyHex] = d;
       }
     }

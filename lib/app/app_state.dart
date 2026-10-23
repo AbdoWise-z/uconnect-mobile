@@ -227,6 +227,10 @@ class AppState extends ChangeNotifier {
         for (final t in store.special.values)
           t.keyHex: normalizePermissions(t.permissions)
       },
+      exceptions: {
+        for (final t in store.special.values)
+          if (t.exception) t.keyHex
+      },
       rules: networkRules,
       localAddresses: localAddresses,
     ));
@@ -568,8 +572,8 @@ class AppState extends ChangeNotifier {
 
   // --- permissions: special rules, network rules, defaults ---------------------
 
-  // What a device with this key may do here right now (a network rule's or
-  // the defaults), as shown for it: where its special rules start from.
+  // What a device with this key may do here right now, as shown for it: what
+  // an exception starts from.
   Set<String> _currentPermissionsOf(String keyHex) {
     for (final p in session.peers.values) {
       if (p.identityKey == keyHex) return p.permissions.toSet();
@@ -577,13 +581,25 @@ class AppState extends ChangeNotifier {
     return normalizePermissions(store.defaultPermissions);
   }
 
-  /// Gives a device special rules, starting from what it may do now.
+  /// Gives a device special rules. They start empty and add to its network
+  /// rule and the defaults, so nothing changes until they are edited.
   Future<void> addSpecialRules(String keyHex, String name) async {
-    store.special.putIfAbsent(
-        keyHex, () => SpecialRules(keyHex, name, _currentPermissionsOf(keyHex)));
+    store.special.putIfAbsent(keyHex, () => SpecialRules(keyHex, name, <String>{}));
     await store.save();
     _applyLocalConfig();
     _resyncPeers();
+  }
+
+  /// Makes a device's special rules an exception (only they apply) or not.
+  /// Turning it on takes in what the network rule and defaults granted, so
+  /// nothing changes until the rules are edited.
+  Future<void> setSpecialException(String keyHex, bool exception) async {
+    final t = store.special[keyHex];
+    if (t == null || t.exception == exception) return;
+    if (exception) t.permissions = {...t.permissions, ..._currentPermissionsOf(keyHex)};
+    t.exception = exception;
+    await store.save();
+    _applyLocalConfig();
   }
 
   /// Drops a device's special rules: network rules and defaults apply again.

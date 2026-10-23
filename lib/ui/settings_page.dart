@@ -112,8 +112,9 @@ class _SettingsPageState extends State<SettingsPage> {
         ]),
         SettingsSection(
           title: 'Permissions',
-          footer: 'For each device the first of these applies: its special '
-              'rules, then this topic\'s network rules, then the defaults.',
+          footer: 'Each device gets what its special rules, this topic\'s '
+              'network rule it matches and the defaults grant, together. '
+              'Special rules marked as an exception apply alone.',
           children: [
             SettingsTile(
               icon: Icons.verified_user_outlined,
@@ -149,7 +150,7 @@ class _SettingsPageState extends State<SettingsPage> {
             icon: Icons.info_outline,
             iconColor: UcColors.textSecondary,
             title: 'uConnect Mobile',
-            subtitle: 'Version 0.1.0',
+            subtitle: 'Version 0.2.0',
             onTap: () => _open('About', _aboutPage),
           ),
         ]),
@@ -511,8 +512,8 @@ class _SettingsPageState extends State<SettingsPage> {
       Padding(
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
         child: Text(
-          'What a device may do here when no special or network rule covers '
-          'it, including devices whose identity is unknown.',
+          'What every device may do here, including devices whose identity '
+          'is unknown. Special and network rules add to these.',
           style: TextStyle(fontSize: 13, color: UcColors.textSecondary),
         ),
       ),
@@ -565,7 +566,8 @@ class _SettingsPageState extends State<SettingsPage> {
               iconColor: UcColors.success,
               title: t.name.isEmpty ? 'Unnamed device' : t.name,
               subtitle: '${fingerprintOfHex(t.keyHex)}\n'
-                  '${t.permissions.length} permission${t.permissions.length == 1 ? '' : 's'}',
+                  '${t.permissions.length} permission${t.permissions.length == 1 ? '' : 's'}'
+                  '${t.exception ? ' · exception' : ''}',
               trailing: TextButton(
                 onPressed: () async {
                   final ok = await _confirm(
@@ -594,7 +596,7 @@ class _SettingsPageState extends State<SettingsPage> {
               icon: Icons.info_outline,
               iconColor: UcColors.textSecondary,
               title: 'uConnect Mobile',
-              subtitle: 'Version 0.1.0',
+              subtitle: 'Version 0.2.0',
             ),
           ],
         ),

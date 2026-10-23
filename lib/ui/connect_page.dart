@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app/app_state.dart';
+import 'logo.dart';
 import 'theme.dart';
 
 class ConnectPage extends StatefulWidget {
@@ -105,7 +106,7 @@ class _ConnectPageState extends State<ConnectPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Icon(Icons.hub_outlined, size: 56, color: UcColors.accent),
+                  const Center(child: UcLogo(size: 72)),
                   const SizedBox(height: 12),
                   Text('uConnect',
                       textAlign: TextAlign.center,

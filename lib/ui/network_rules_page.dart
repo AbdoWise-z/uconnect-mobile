@@ -141,8 +141,9 @@ class _NetworkRulesPageState extends State<NetworkRulesPage> {
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
                 child: Text(
                   'Choose what devices may do here by where they connect from. '
-                  'The first rule a device matches applies, unless it has '
-                  'special rules. A device matches once it has proved its '
+                  'The first rule a device matches applies, adding to the '
+                  'defaults and to its special rules (unless those are an '
+                  'exception). A device matches once it has proved its '
                   'identity over a direct connection; through the relay its '
                   'address is unknown.',
                   style: TextStyle(fontSize: 13, color: UcColors.textSecondary),

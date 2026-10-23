@@ -215,8 +215,14 @@ class DeviceView extends StatelessWidget {
         ? state.networkRules[p.networkRule]
         : null;
     final (rulesText, rulesColor) = switch (p.permissionSource) {
-      'device' => ('special rules', UcColors.success),
-      'rule' => ('network rule ${rule?.displayName ?? ''}', UcColors.accent),
+      'device' when p.exception => ('special rules (exception)', UcColors.success),
+      'device' => (
+          rule != null
+              ? 'special rules + network rule ${rule.displayName} + defaults'
+              : 'special rules + defaults',
+          UcColors.success
+        ),
+      'rule' => ('network rule ${rule?.displayName ?? ''} + defaults', UcColors.accent),
       _ => ('defaults', UcColors.textSecondary),
     };
     return _card('Identity & rules', [
@@ -277,8 +283,9 @@ class DeviceView extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              'Its special rules start from what it may do now and come '
-              'before network rules and defaults. Folders sync only with '
+              'Its special rules add to what network rules and defaults '
+              'grant it, so nothing changes until you edit them. Make them '
+              'an exception to apply only those. Folders sync only with '
               'devices that have special rules.',
               style: TextStyle(color: UcColors.textSecondary, fontSize: 12),
             ),
@@ -304,7 +311,10 @@ class DeviceView extends StatelessWidget {
   Widget _permissionsCard(BuildContext context, PeerRecord p) {
     final entry = state.store.special[p.identityKey];
     final editable = entry != null;
-    final current = editable ? entry.permissions : p.permissions.toSet();
+    final current = p.permissions.toSet();
+    final rule = p.networkRule >= 0 && p.networkRule < state.networkRules.length
+        ? state.networkRules[p.networkRule]
+        : null;
     final rows = <Widget>[];
     String? service;
     for (final info in permissionTable) {
@@ -320,18 +330,57 @@ class DeviceView extends StatelessWidget {
                   color: UcColors.textDisabled)),
         ));
       }
+      // Which layer grants it; one carried over from a network rule or the
+      // defaults is not for the special rules to take away.
+      final from = p.permissionFrom[info.id];
+      final carried = from == 'rule' || from == 'default';
+      final (fromIcon, fromColor, fromText) = switch (from) {
+        'device' => (Icons.verified_user, UcColors.success, 'From its special rules'),
+        'rule' => (
+            Icons.lan_outlined,
+            UcColors.accent,
+            'Carried over from the network rule ${rule?.displayName ?? ''}'
+          ),
+        'default' => (
+            Icons.shield_outlined,
+            UcColors.textSecondary,
+            'Carried over from your defaults'
+          ),
+        _ => (null, UcColors.textSecondary, ''),
+      };
       rows.add(SwitchListTile(
         dense: true,
         contentPadding: EdgeInsets.zero,
+        secondary: SizedBox(
+          width: 22,
+          child: fromIcon == null
+              ? null
+              : Tooltip(
+                  message: fromText,
+                  child: Icon(fromIcon, size: 18, color: fromColor)),
+        ),
         title: Text(info.label,
             style: TextStyle(fontSize: 13, color: UcColors.text)),
-        subtitle: Text(info.description,
+        subtitle: Text.rich(TextSpan(children: [
+          TextSpan(text: info.description),
+          if (carried)
+            TextSpan(
+                text: '\n$fromText',
+                style: TextStyle(color: fromColor)),
+        ]),
             style: TextStyle(
                 fontSize: 11, color: UcColors.textSecondary)),
         value: current.contains(info.id),
         onChanged: !editable
             ? null
-            : (on) async {
+            : carried
+                // Granted below the special rules: say how to take it away.
+                ? (_) => ScaffoldMessenger.of(context)
+                  ..hideCurrentSnackBar()
+                  ..showSnackBar(SnackBar(
+                      content: Text('$fromText. Turn on Exception to take it '
+                          'away from this device.')))
+                : (on) async {
                 final next = <String>{...entry.permissions};
                 if (on) {
                   next.add(info.id);
@@ -342,13 +391,15 @@ class DeviceView extends StatelessWidget {
               },
       ));
     }
-    final rule = p.networkRule >= 0 && p.networkRule < state.networkRules.length
-        ? state.networkRules[p.networkRule]
-        : null;
     final note = switch (p.permissionSource) {
-      'device' => 'Its special rules. Changes apply right away.',
+      'device' when p.exception => 'Only its special rules apply: it is an '
+          'exception to the network rules and defaults. Changes apply right '
+          'away.',
+      'device' => 'Its special rules, plus what '
+          '${rule != null ? 'the network rule ${rule.displayName} and your defaults' : 'your defaults'} '
+          'grant it. Changes apply right away.',
       'rule' => 'From the network rule ${rule?.displayName ?? ''}, because it '
-          'connects from ${p.address}.',
+          'connects from ${p.address}, plus your defaults.',
       _ => 'Your default permissions, which any device with the invite link '
           'gets.',
     };
@@ -379,6 +430,21 @@ class DeviceView extends StatelessWidget {
               child: const Text('Add'),
             ),
           ]),
+        ),
+      if (editable)
+        SwitchListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          secondary: Icon(Icons.rule, size: 20, color: UcColors.textSecondary),
+          title: Text('Exception',
+              style: TextStyle(fontSize: 13, color: UcColors.text)),
+          subtitle: Text(
+              'Only its special rules apply, so it can be given less than '
+              'network rules or defaults grant. Turning this on keeps what it '
+              'has now.',
+              style: TextStyle(fontSize: 11, color: UcColors.textSecondary)),
+          value: entry.exception,
+          onChanged: (on) => state.setSpecialException(p.identityKey, on),
         ),
       // Read-only until it has special rules: dimmed so it reads as such.
       Opacity(

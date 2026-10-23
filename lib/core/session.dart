@@ -40,10 +40,13 @@ class PeerRecord {
   String identityKey = ''; // hex public key, once verified
   String fingerprint = '';
   bool special = false; // this device set special rules for it
+  bool exception = false; // ...marked as an exception: only those apply
   List<String> permissions = const []; // what this device grants it
-  // Where they come from: "device" (its special rules), "rule" (a network
-  // rule, index in networkRule) or "default".
+  // The most specific layer that applies: "device" (its special rules),
+  // "rule" (a network rule, index in networkRule) or "default"; and for each
+  // permission, the layer that grants it.
   String permissionSource = 'default';
+  Map<String, String> permissionFrom = const {};
   int networkRule = -1;
   // Where its direct connection comes from; empty when relayed or unknown.
   String address = '';
@@ -78,26 +81,29 @@ String goneName(int gone) => switch (gone) {
       _ => 'unspecified',
     };
 
-/// What this device lets others do, the first that applies:
+/// What this device lets others do: everything these grant, together:
 ///   1. its special rules: permissions set for that device (by public key);
 ///   2. the first of this topic's network rules its address matches;
-///   3. the defaults, which never include sensitive permissions (camera,
-///      screen, control...), as any holder of the invite link gets them.
+///   3. the defaults, which any holder of the invite link gets.
+/// Special rules marked as an exception replace 2 and 3: only they apply.
 /// 1 and 2 need the device to have proven its identity. Owned by the app,
 /// which pushes a copy to the session whenever it changes.
 class AccessPolicy {
   AccessPolicy(
       {Set<String>? defaults,
       Map<String, Set<String>>? special,
+      Set<String>? exceptions,
       List<NetworkRule>? rules,
       List<InternetAddress>? localAddresses})
       : defaults = defaults ?? {},
         special = special ?? {},
+        exceptions = exceptions ?? {},
         rules = rules ?? const [],
         localAddresses = localAddresses ?? const [];
 
   Set<String> defaults;
   Map<String, Set<String>> special; // public key (hex) -> its special rules
+  Set<String> exceptions; // keys whose special rules are all that applies
   List<NetworkRule> rules; // this topic's network rules, first match wins
   List<InternetAddress> localAddresses; // this device's, for the "m" parts
 }
@@ -262,19 +268,34 @@ class Session {
 
   Set<String> permissionsFor(String dev) => resolvePermissions(dev).$1;
 
-  /// What [dev] may do here and where that comes from: "device", "rule" or
-  /// "default" (see [AccessPolicy]).
-  (Set<String>, String) resolvePermissions(String dev) {
+  /// What [dev] may do here, the most specific layer that applies ("device",
+  /// "rule" or "default", see [AccessPolicy]) and, per permission, the layer
+  /// that grants it.
+  (Set<String>, String, Map<String, String>) resolvePermissions(String dev) {
+    final from = <String, String>{};
+    String? source;
+    // Most specific first; lower layers only add what is not granted yet.
+    void add(Iterable<String> perms, String layer) {
+      for (final id in normalizePermissions(perms)) {
+        from.putIfAbsent(id, () => layer);
+      }
+      source ??= layer;
+    }
+
     final p = peers[dev];
     if (p != null && p.identityState == 'verified') {
       final special = _policy.special[p.identityKey];
-      if (special != null) return (normalizePermissions(special), 'device');
-      final rule = networkRuleFor(dev);
-      if (rule >= 0) {
-        return (normalizePermissions(_policy.rules[rule].permissions), 'rule');
+      if (special != null) {
+        add(special, 'device');
+        if (_policy.exceptions.contains(p.identityKey)) {
+          return (from.keys.toSet(), 'device', from);
+        }
       }
+      final rule = networkRuleFor(dev);
+      if (rule >= 0) add(_policy.rules[rule].permissions, 'rule');
     }
-    return (normalizePermissions(_policy.defaults), 'default');
+    add(_policy.defaults, 'default');
+    return (from.keys.toSet(), source!, from);
   }
 
   /// The peer's direct-connection address, or null when relayed or unknown.
@@ -512,11 +533,13 @@ class Session {
       }
       p.special = p.identityState == 'verified' &&
           _policy.special.containsKey(p.identityKey);
+      p.exception = p.special && _policy.exceptions.contains(p.identityKey);
       p.address = peerAddress(entry.key)?.address ?? '';
       p.networkRule = networkRuleFor(entry.key);
-      final (perms, source) = resolvePermissions(entry.key);
+      final (perms, source, from) = resolvePermissions(entry.key);
       p.permissions = perms.toList()..sort();
       p.permissionSource = source;
+      p.permissionFrom = from;
     }
     _updateSnapshot(node);
     _notify();
