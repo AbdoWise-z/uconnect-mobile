@@ -74,6 +74,17 @@ class ScreenDecoder {
     return textureId;
   }
 
+  /// Changes the playout buffer of a running decoder (the automatic buffer
+  /// following the network).
+  Future<void> setBuffer(int bufferMs) async {
+    if (!supported || _disposed || textureId == null) return;
+    try {
+      await _channel.invokeMethod<void>('setBuffer', {'bufferMs': bufferMs});
+    } on PlatformException {
+      // the decoder is being torn down
+    }
+  }
+
   /// Pictures rendered, and rendered after their time, since the last call.
   Future<Map<String, Object?>> stats() async {
     if (!supported || _disposed) return const {};

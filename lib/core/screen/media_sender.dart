@@ -69,6 +69,11 @@ class MediaSender {
   bool get pathLimited => _bwe.limited;
   bool get applicationLimited => _bwe.applicationLimited;
 
+  /// The encoder's rate averaged over the last second or so: what the quality
+  /// ladder goes by, so a spell of repair packets does not step it.
+  int get smoothedEncoderBps => _smoothEncoderBps.toInt();
+  double _smoothEncoderBps = 0;
+
   /// What the encoder should produce: the path's rate less the repair
   /// packets' share and the repeats.
   int get encoderBps {
@@ -121,8 +126,11 @@ class MediaSender {
 
   /// Over a reliable path what is unacknowledged is what waits in the socket
   /// and the network: bounded, or the lag grows unseen. At least a round trip
-  /// and a half of it, though, or a long path could never carry the rate.
-  int get _inflightLimit => _bwe.targetBps * max(inflightMs, (1.5 * rttMs).round()) ~/ 8000;
+  /// and a half of it, though (the quickest seen: queueing lengthens the
+  /// others, and a bound that grew with it would bound nothing), or a long
+  /// path could never carry the rate.
+  int get _inflightLimit => _bwe.targetBps * max(inflightMs, (1.5 * minRttMs).round()) ~/ 8000;
+  double minRttMs = 0;
 
   /// Sends what the pacing budget allows; call every few milliseconds.
   /// Returns false if the transport refused a packet (try again soon).
@@ -131,6 +139,8 @@ class MediaSender {
     // packets in order; a frame's packets leave a few at a time.
     final rate = _bwe.targetBps * pacingGain / 8000; // bytes per ms
     if (_lastPumpMs != 0) _budgetBytes = min(_budgetBytes + rate * (nowMs - _lastPumpMs), _maxBurstBytes + rate * 5);
+    final weight = _lastPumpMs != 0 && _smoothEncoderBps > 0 ? min(1.0, (nowMs - _lastPumpMs) / 1000) : 1.0;
+    _smoothEncoderBps += (encoderBps - _smoothEncoderBps) * weight;
     _lastPumpMs = nowMs;
     _trimSent(nowMs);
     final inflightLimit = _inflightLimit;
@@ -155,6 +165,10 @@ class MediaSender {
   void _trimSent(int nowMs) {
     _sent.removeWhere((seq, s) {
       if (nowMs - s.sentMs <= _sentHistoryMs) return false;
+      // On a reliable path an unacknowledged packet is still queued somewhere
+      // on the way, however old: it stays counted (within reason), or the
+      // bound would let the queue grow unseen.
+      if (reliable && !s.acknowledged && !s.lost && nowMs - s.sentMs < 10 * _sentHistoryMs) return false;
       if (!s.acknowledged && !s.lost) inflightBytes -= s.size;
       return true;
     });
@@ -193,9 +207,15 @@ class MediaSender {
     if (newestSentMs >= 0) {
       final rtt = max(1.0, (nowMs - newestSentMs).toDouble() - f.heldMs);
       rttMs = rttMs > 0 ? 0.8 * rttMs + 0.2 * rtt : rtt;
+      minRttMs = minRttMs > 0 ? min(minRttMs, rtt) : rtt;
     }
     results.sort((a, b) => a.sendMs.compareTo(b.sendMs));
     if (results.isNotEmpty) _bwe.onFeedback(results, nowMs, rttMs);
+    // On a reliable path the bound on what is in flight is what limits
+    // sending when the path cannot drain it: the rate follows what arrives.
+    if (reliable && results.isNotEmpty && inflightBytes >= 0.9 * _inflightLimit && _bwe.receiveBps > 0) {
+      _bwe.limitTo((0.85 * _bwe.receiveBps).toInt());
+    }
     // Repeats: what it still wants, once per 40 ms each, while it is recent.
     for (final seq in f.nacks) {
       final s = _sent[seq];

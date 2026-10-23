@@ -38,7 +38,7 @@ class ViewQuality {
   static const widths = <int>[3840, 2560, 1920, 1280, 854];
   static const frameRates = <int>[15, 24, 30, 60, 90, 120];
   static const bitrates = <int>[0, 2000000, 4000000, 8000000, 16000000, 32000000, 50000000];
-  static const buffers = <int>[0, 50, 100, 150, 250, 500];
+  static const buffers = <int>[-1, 0, 50, 100, 150, 250, 500]; // -1: automatic
 
   static String widthLabel(int width) => switch (width) {
         3840 => 'Original',
@@ -50,7 +50,7 @@ class ViewQuality {
       };
   static String bitrateLabel(int bitrate) =>
       bitrate <= 0 ? 'Automatic' : '${bitrate ~/ 1000000} Mbit/s';
-  static String bufferLabel(int ms) => ms <= 0 ? 'None' : '$ms ms';
+  static String bufferLabel(int ms) => ms < 0 ? 'Automatic' : ms == 0 ? 'None' : '$ms ms';
 }
 
 class ScreenView extends StatefulWidget {
@@ -117,7 +117,7 @@ class _ScreenViewState extends State<ScreenView> {
       if (_viewer.active && _textureId == null && !_startingDecoder && _decoder.supported) {
         _startingDecoder = true;
         final wanted = _decoderWanted;
-        final id = await _decoder.start(_viewer, bufferMs: widget.state.store.viewBufferMs);
+        final id = await _decoder.start(_viewer, bufferMs: _bufferMs());
         _startingDecoder = false;
         if (mounted && id != null && wanted == _decoderWanted) setState(() => _textureId = id);
       }
@@ -138,7 +138,26 @@ class _ScreenViewState extends State<ScreenView> {
       final render = await _decoder.stats();
       if (mounted) setState(() => _render = render);
     });
+    // The playout buffer in use: the automatic one follows the network.
+    _bufferTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (!mounted || _textureId == null) return;
+      final ms = _bufferMs();
+      _viewer.playoutMs = ms;
+      if (widget.state.store.viewBufferMs < 0 && ms != _appliedBufferMs) {
+        _appliedBufferMs = ms;
+        _decoder.setBuffer(ms);
+      }
+    });
     _startView();
+  }
+
+  Timer? _bufferTimer;
+  int _appliedBufferMs = -1;
+
+  // The playout buffer to use: the setting, or the viewer's automatic one.
+  int _bufferMs() {
+    final chosen = widget.state.store.viewBufferMs;
+    return chosen < 0 ? _viewer.autoPlayoutMs : chosen;
   }
 
   // Requests the stream at the quality the user has selected. Used on open and
@@ -187,6 +206,7 @@ class _ScreenViewState extends State<ScreenView> {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _viewer.releaseInput();
     _statsTimer?.cancel();
+    _bufferTimer?.cancel();
     _viewer.dispose();
     _decoder.dispose();
     _focusNode.dispose();
@@ -409,7 +429,12 @@ class _ScreenViewState extends State<ScreenView> {
       'Received ${n(_viewer.unitsPerSecond)} fps · ${n(_viewer.kbps / 1000, 1)} Mbit/s · '
           'loss ${n(_viewer.lossPct, 1)}% · jitter ${n(_viewer.jitterMs, 1)} ms',
       'Shown ${n(_render['rendered'])} fps · late ${n(_render['late'])} · '
-          'buffer ${ViewQuality.bufferLabel(store.viewBufferMs)}',
+          'buffer ${n(_render['bufferMs'] ?? _bufferMs())} ms${store.viewBufferMs < 0 ? ' (automatic)' : ''} · '
+          'recovered ${_viewer.lastSecond.recovered} · repeats ${_viewer.lastSecond.repaired} · given up ${_viewer.lastSecond.givenUp}',
+      if (host['rttMs'] is num)
+        'Path: round trip ${n(host['rttMs'])} ms · loss ${n(host['lossPct'], 1)}% · '
+            '${(host['fec'] as num? ?? 0) > 0 ? 'repair 1 per ${n(host['fec'])}' : 'no repair'} · '
+            'lag ${n(host['lagMs'])} ms · ${host['estimator'] ?? ''}',
       if (host.isNotEmpty)
         'Host: ${n(host['fps'])} fps'
             '${host['encodeMs'] is num ? ', encode ${n(host['encodeMs'], 1)} ms' : ''}'

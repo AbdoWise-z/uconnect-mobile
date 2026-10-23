@@ -13,6 +13,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import '../session.dart';
@@ -144,6 +145,12 @@ class ScreenViewer {
 
   /// The playout delay the decoder holds frames for, reported to the host.
   int playoutMs = 0;
+
+  /// The playout delay the network calls for: the jitter and the time gaps
+  /// take to fill, raised at once and lowered slowly (the view applies it
+  /// when the buffer setting is "automatic").
+  int autoPlayoutMs = 100;
+  int _autoAt = 0;
 
   /// What the last second looked like, for the statistics overlay: frames
   /// completed and their bitrate, loss, jitter, and what the repair packets
@@ -421,6 +428,11 @@ class ScreenViewer {
     final now = _clock.elapsedMilliseconds;
     media.expire(now);
     if (media.feedbackDue(now)) _sendFeedback(media, now);
+    if (now - _autoAt >= 250) {
+      _autoAt = now;
+      final want = media.suggestedPlayoutMs();
+      autoPlayoutMs = want > autoPlayoutMs ? want : max(want, autoPlayoutMs - 5);
+    }
     // No decoded picture for 8 s after start: tell the user (7.3).
     if (DateTime.now().difference(_lastUnitAt) > const Duration(seconds: 8) &&
         error.isEmpty &&

@@ -474,7 +474,7 @@ class ScreenHost {
     // A change costs a keyframe and takes a moment to show in the rates:
     // one at a time, a second and a half apart.
     if (_clock.elapsedMilliseconds - _qualityChangedMs < 1500) return;
-    final bps = media.encoderBps;
+    final bps = media.smoothedEncoderBps;
     final atFps = (_maxFps / 30).clamp(0.5, 4.0);
     final down = media.pathLimited && !media.applicationLimited;
     // Frame rate: under about a megabit the smallest picture at 60 fps is a

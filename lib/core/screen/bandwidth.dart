@@ -62,6 +62,16 @@ class BandwidthEstimator {
   /// target says nothing about the path.
   bool get applicationLimited => sendBps < 0.7 * _target;
 
+  /// The path has shown it carries no more than [bps] (a reliable path's
+  /// queue filling): the target comes down to it.
+  void limitTo(int bps) {
+    final target = bps.clamp(minBps, maxBps);
+    if (target >= _target) return;
+    _target = target;
+    _lastDecreaseBps = target;
+    state = 'decrease';
+  }
+
   _Signal _detect(double trend, double dtMs) {
     final k = trend.abs() < _threshold ? 0.039 : 0.0087;
     _threshold = (_threshold + k * (trend.abs() - _threshold) * dtMs.clamp(0, 100)).clamp(6, 600);

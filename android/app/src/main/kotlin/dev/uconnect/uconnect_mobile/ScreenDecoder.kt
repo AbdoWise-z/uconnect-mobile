@@ -64,6 +64,12 @@ class ScreenDecoder(
         when (call.method) {
             "create" -> result.success(create((call.argument<Number>("bufferMs") ?: 0).toLong()))
             "stats" -> result.success(stats())
+            "setBuffer" -> {
+                // The playout buffer follows the network (the viewer's choice of
+                // "automatic"): pictures already queued keep their times.
+                bufferNs = ((call.argument<Number>("bufferMs") ?: 0).toLong()).coerceIn(0, 2000) * 1_000_000
+                result.success(null)
+            }
             "decode" -> {
                 val bytes = call.argument<ByteArray>("bytes")
                 val keyframe = call.argument<Boolean>("keyframe") ?: false

@@ -127,9 +127,21 @@ class MediaReceiver {
       }
       _highestSeq = seq;
     } else {
-      _missing.remove(seq);
+      // A gap filled: how long that took is what a playout buffer must cover.
+      final since = _missing.remove(seq);
+      if (since != null && nowMs - since > repairDelayMs) repairDelayMs = (nowMs - since).toDouble();
     }
   }
+
+  /// The longest a recent gap took to fill (a repeat arriving, or the packet
+  /// merely late), fading over a few seconds: with the jitter, what the
+  /// playout buffer should cover to show every frame in cadence.
+  double repairDelayMs = 0;
+  int _lastExpireMs = 0;
+
+  /// The playout delay that would show every frame on time, from the jitter
+  /// and the time gaps take to fill; the caller smooths it.
+  int suggestedPlayoutMs() => (interval + 2 * jitterMs + repairDelayMs).round().clamp(20, 500);
 
   /// A media or repair packet; returns the frames now complete and in order.
   List<EncodedFrame> receive(Uint8List packet, int nowMs) {
@@ -247,6 +259,8 @@ class MediaReceiver {
       keyWanted = true;
     }
     _missing.removeWhere((seq, since) => nowMs - since > _missingForgetMs);
+    if (_lastExpireMs != 0) repairDelayMs *= pow(0.5, (nowMs - _lastExpireMs) / 3000);
+    _lastExpireMs = nowMs;
   }
 
   bool feedbackDue(int nowMs) {

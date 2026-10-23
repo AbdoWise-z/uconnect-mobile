@@ -95,7 +95,7 @@ class AppStore {
   int screenMaxWidth = 1920;
   int screenMaxFps = 60;
   int viewBitrate = 0;
-  int viewBufferMs = 100;
+  int viewBufferMs = -1; // -1: automatic, following the network
   // Limits on sharing this phone's screen (Settings > Screen sharing): width
   // (0 = the screen's own), frame rate and bitrate.
   int screenShareMaxWidth = 0;
@@ -160,7 +160,7 @@ class AppStore {
     int number(String key, int fallback) =>
         values[key] is int ? values[key] as int : fallback;
     viewBitrate = number('viewBitrate', 0);
-    viewBufferMs = number('viewBufferMs', 100);
+    viewBufferMs = number('viewBufferMs', -1);
     screenShareMaxWidth = number('screenShareMaxWidth', 0);
     screenShareMaxFps = number('screenShareMaxFps', 60);
     screenShareMaxBitrate = number('screenShareMaxBitrate', 16000000);
