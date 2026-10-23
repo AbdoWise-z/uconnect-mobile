@@ -27,7 +27,7 @@ class DeviceView extends StatelessWidget {
         if (p == null) {
           return Scaffold(
             appBar: AppBar(title: const Text('Device')),
-            body: const Center(
+            body: Center(
               child: Text('This device is no longer in the topic.',
                   style: TextStyle(color: UcColors.textSecondary)),
             ),
@@ -57,7 +57,7 @@ class DeviceView extends StatelessWidget {
             SizedBox(
               width: 110,
               child: Text(label,
-                  style: const TextStyle(
+                  style: TextStyle(
                       color: UcColors.textSecondary, fontSize: 13)),
             ),
             Expanded(
@@ -80,7 +80,7 @@ class DeviceView extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(title,
-                        style: const TextStyle(
+                        style: TextStyle(
                             fontWeight: FontWeight.w600,
                             color: UcColors.text)),
                   ),
@@ -156,7 +156,7 @@ class DeviceView extends StatelessWidget {
             Text(
               'Check that "${p.displayName}" shows exactly this fingerprint '
               'under its own identity before trusting it:',
-              style: const TextStyle(color: UcColors.textSecondary),
+              style: TextStyle(color: UcColors.textSecondary),
             ),
             const SizedBox(height: 12),
             Container(
@@ -170,14 +170,14 @@ class DeviceView extends StatelessWidget {
               child: Text(
                 p.fingerprint,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                     fontFamily: 'monospace',
                     fontSize: 15,
                     color: UcColors.text),
               ),
             ),
             const SizedBox(height: 12),
-            const Text(
+            Text(
               'A trusted device can be granted more: screen viewing, remote '
               'control, writing to your files.',
               style: TextStyle(color: UcColors.textSecondary, fontSize: 12),
@@ -217,7 +217,7 @@ class DeviceView extends StatelessWidget {
         rows.add(Padding(
           padding: const EdgeInsets.only(top: 8, bottom: 2),
           child: Text(service.toUpperCase(),
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 11,
                   letterSpacing: 1,
                   color: UcColors.textDisabled)),
@@ -227,9 +227,9 @@ class DeviceView extends StatelessWidget {
         dense: true,
         contentPadding: EdgeInsets.zero,
         title: Text(info.label,
-            style: const TextStyle(fontSize: 13, color: UcColors.text)),
+            style: TextStyle(fontSize: 13, color: UcColors.text)),
         subtitle: Text(info.description,
-            style: const TextStyle(
+            style: TextStyle(
                 fontSize: 11, color: UcColors.textSecondary)),
         value: current.contains(info.id),
         onChanged: !editable
@@ -249,7 +249,7 @@ class DeviceView extends StatelessWidget {
       editable ? 'What it may do here' : 'What it may do here (defaults)',
       [
         if (!editable)
-          const Padding(
+          Padding(
             padding: EdgeInsets.only(bottom: 6),
             child: Text(
               'Trust the device to give it permissions of its own.',
@@ -262,6 +262,7 @@ class DeviceView extends StatelessWidget {
   }
 
   Widget _servicesCard(BuildContext context, PeerRecord p) {
+    final connected = p.stateCode == 3;
     final offersStorage = p.services.contains(Services.storage);
     final mayBrowse = p.grantedToMe.contains(Perm.storageObserve);
     final offersScreen = p.services.contains(Services.screen);
@@ -270,100 +271,138 @@ class DeviceView extends StatelessWidget {
     final mayControl = p.grantedToMe.contains(Perm.controlInput);
     final offersCamera = p.services.contains(Services.camera);
     final mayViewCamera = p.grantedToMe.contains(Perm.cameraView);
-    return _card('On that device', [
-      if (p.grantedToMe.isNotEmpty)
-        _row('Granted to us', p.grantedToMe.join(', '))
+
+    void open(Widget page) => Navigator.of(context)
+        .push(MaterialPageRoute<void>(builder: (_) => page));
+
+    final tiles = <Widget>[
+      if (offersStorage)
+        _actionTile(
+          icon: Icons.folder_outlined,
+          title: 'Browse files',
+          enabled: connected && mayBrowse,
+          subtitle: !connected
+              ? 'Device is offline'
+              : mayBrowse
+                  ? 'Open, download and upload shared folders'
+                  : 'Not granted to this device yet',
+          onTap: () => open(StorageView(
+              state: state, devId: p.devId, devName: p.displayName)),
+        ),
+      if (offersScreen)
+        _actionTile(
+          icon: Icons.screen_share_outlined,
+          title: 'Watch screen',
+          enabled: connected && mayWatch,
+          subtitle: !connected
+              ? 'Device is offline'
+              : mayWatch
+                  ? 'See a live view of its screen'
+                  : 'Not granted to this device yet',
+          onTap: () => open(ScreenView(
+              state: state, devId: p.devId, devName: p.displayName)),
+        ),
+      if (offersCamera)
+        _actionTile(
+          icon: Icons.videocam_outlined,
+          title: 'Watch camera',
+          enabled: connected && mayViewCamera,
+          subtitle: !connected
+              ? 'Device is offline'
+              : mayViewCamera
+                  ? 'See a live feed from its camera'
+                  : 'Not granted to this device yet',
+          onTap: () => open(ScreenView(
+              state: state,
+              devId: p.devId,
+              devName: p.displayName,
+              camera: true)),
+        ),
+      if (offersControl && mayControl)
+        _actionTile(
+          icon: Icons.touch_app_outlined,
+          title: 'Take control',
+          enabled: connected && mayWatch,
+          subtitle: !connected
+              ? 'Device is offline'
+              : mayWatch
+                  ? 'Watch and drive its mouse and keyboard'
+                  : 'Also needs screen viewing to control',
+          onTap: () => open(ScreenView(
+              state: state,
+              devId: p.devId,
+              devName: p.displayName,
+              startControl: true)),
+        ),
+    ];
+
+    return _card('Use this device', [
+      if (tiles.isEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(2, 0, 2, 6),
+          child: Text(
+            "This device isn't offering anything to you yet.",
+            style: TextStyle(fontSize: 13, color: UcColors.textSecondary),
+          ),
+        )
       else
-        _row('Granted to us', 'nothing yet'),
-      const SizedBox(height: 8),
-      Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: [
-          FilledButton.icon(
-            onPressed: p.stateCode == 3 && offersStorage && mayBrowse
-                ? () {
-                    Navigator.of(context).push(MaterialPageRoute<void>(
-                      builder: (_) => StorageView(
-                          state: state, devId: p.devId, devName: p.displayName),
-                    ));
-                  }
-                : null,
-            icon: const Icon(Icons.folder_outlined, size: 18),
-            label: const Text('Browse files'),
-          ),
-          FilledButton.icon(
-            onPressed: p.stateCode == 3 && offersScreen && mayWatch
-                ? () {
-                    Navigator.of(context).push(MaterialPageRoute<void>(
-                      builder: (_) => ScreenView(
-                          state: state, devId: p.devId, devName: p.displayName),
-                    ));
-                  }
-                : null,
-            icon: const Icon(Icons.screen_share_outlined, size: 18),
-            label: const Text('Watch screen'),
-          ),
-          if (offersCamera)
-            FilledButton.icon(
-              onPressed: p.stateCode == 3 && mayViewCamera
-                  ? () {
-                      Navigator.of(context).push(MaterialPageRoute<void>(
-                        builder: (_) => ScreenView(
-                            state: state,
-                            devId: p.devId,
-                            devName: p.displayName,
-                            camera: true),
-                      ));
-                    }
-                  : null,
-              icon: const Icon(Icons.videocam_outlined, size: 18),
-              label: const Text('Watch camera'),
-            ),
-          if (offersControl && mayControl)
-            FilledButton.icon(
-              onPressed: p.stateCode == 3 && offersScreen && mayWatch
-                  ? () {
-                      Navigator.of(context).push(MaterialPageRoute<void>(
-                        builder: (_) => ScreenView(
-                            state: state,
-                            devId: p.devId,
-                            devName: p.displayName,
-                            startControl: true),
-                      ));
-                    }
-                  : null,
-              icon: const Icon(Icons.touch_app_outlined, size: 18),
-              label: const Text('Control'),
-            ),
-        ],
-      ),
-      if (offersControl && mayControl && !mayWatch)
-        const Padding(
-          padding: EdgeInsets.only(top: 6),
-          child: Text(
-            'It granted control but not screen viewing — you need to watch the '
-            'screen to control it.',
-            style: TextStyle(fontSize: 12, color: UcColors.textSecondary),
-          ),
-        ),
-      if (offersStorage && !mayBrowse)
-        const Padding(
-          padding: EdgeInsets.only(top: 6),
-          child: Text(
-            'It offers storage but has not granted browsing to this device.',
-            style: TextStyle(fontSize: 12, color: UcColors.textSecondary),
-          ),
-        ),
-      if (offersScreen && !mayWatch)
-        const Padding(
-          padding: EdgeInsets.only(top: 6),
-          child: Text(
-            'It offers screen sharing but has not granted watching to this device.',
-            style: TextStyle(fontSize: 12, color: UcColors.textSecondary),
-          ),
-        ),
+        ...tiles,
     ]);
+  }
+
+  // One tappable action row: an icon chip, a title and a status line, with a
+  // chevron when it can be opened. Dimmed with an inline reason when it can't.
+  Widget _actionTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required bool enabled,
+    required VoidCallback onTap,
+  }) {
+    final tint = enabled ? UcColors.accent : UcColors.textDisabled;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: enabled ? onTap : null,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 10),
+          child: Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: tint.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: Icon(icon, size: 20, color: tint),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            color:
+                                enabled ? UcColors.text : UcColors.textDisabled)),
+                    const SizedBox(height: 2),
+                    Text(subtitle,
+                        style: TextStyle(
+                            fontSize: 12, color: UcColors.textSecondary)),
+                  ],
+                ),
+              ),
+              if (enabled)
+                Icon(Icons.chevron_right,
+                    size: 22, color: UcColors.textSecondary),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   String _bytes(int n) {
