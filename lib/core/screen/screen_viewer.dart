@@ -161,6 +161,7 @@ class ScreenViewer {
   // Report counters (7.2), reset each report.
   int _received = 0;
   int _lost = 0;
+  int _latestCaptureMs = -1; // of the newest complete frame: the host reads its lag from it
   int _late = 0;
   int _decodeMs = 0;
   int _bytes = 0;
@@ -510,6 +511,7 @@ class ScreenViewer {
       _nextDeliver = (next.sequence + 1) & 0xFFFFFFFF;
       _received++;
       _lastUnitAt = DateTime.now();
+      _latestCaptureMs = next.captureMs;
       _units.add(VideoAccessUnit(
           next.sequence, next.keyframe, next.captureMs, next.assemble()));
     }
@@ -577,6 +579,7 @@ class ScreenViewer {
       'received': _received,
       'lost': _lost,
       'late': _late,
+      if (_latestCaptureMs >= 0) 'latestMs': _latestCaptureMs,
       'jitterMs': _delay.jitterMs,
       'owdTrendMs': _delay.trendMs,
       'decodeMs': _decodeMs,

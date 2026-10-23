@@ -82,6 +82,11 @@ class ScreenHost {
   BitrateControl _rate = BitrateControl(bitrate: 8000000, cap: 16000000);
   // A UDP path that loses too much: the stream moves to TCP (7.2).
   final _lossy = LossyPath();
+  int _lastSentTs = 0; // capture time of the newest frame sent
+  int _lagMs = 0; // how far behind the viewer is, from its reports
+  int _behindAt = -10000; // when the queue was last dropped for lag
+  bool _awaitKey = false; // dropped the queue: P-frames are useless until a keyframe
+  static const behindMs = 600;
   static const tcpBitrateCap = 2000000;
   bool _overTcp = false;
   int get _bitrate => _rate.bitrate;
@@ -276,6 +281,10 @@ class ScreenHost {
     _keyframeAt = -1000;
     _lossy.reset();
     _overTcp = false;
+    _lastSentTs = 0;
+    _lagMs = 0;
+    _behindAt = -10000;
+    _awaitKey = false;
     state = HostState.sharing;
     _controlOn = false;
     _history.clear();
@@ -424,6 +433,11 @@ class ScreenHost {
     final count = (u.bytes.length + _payloadMax - 1) ~/ _payloadMax;
     if (count == 0 || count > 0xFFFF) return;
     final ts = (u.ptsUs ~/ 1000) & 0xFFFFFFFF;
+    if (_awaitKey) {
+      if (!u.keyframe) return;
+      _awaitKey = false;
+    }
+    _lastSentTs = ts;
     final datagrams = <Uint8List>[];
     for (var i = 0; i < count; i++) {
       final start = i * _payloadMax;
@@ -480,6 +494,7 @@ class ScreenHost {
   }
 
   int _sentSinceReport = 0; // datagrams, for the viewer's next report
+  bool _delivered = false; // the viewer has received something: the stream is up
   bool _send(String dev, Uint8List dg) {
     // Best effort; the viewer nacks anything the path dropped.
     final ok = session.node?.sendDatagram(session.topicId, dev, dg) ?? false;
@@ -522,7 +537,9 @@ class ScreenHost {
     var lost = _intf(msg, 'lost');
     // Nothing at all arrived of what was sent: all of it is lost (the viewer
     // cannot count frames it never saw a piece of).
-    if (received == 0 && lost == 0 && _sentSinceReport > 0) lost = _sentSinceReport;
+    // (Once something has arrived: before that the stream is still starting.)
+    if (received > 0) _delivered = true;
+    if (_delivered && received == 0 && lost == 0 && _sentSinceReport > 0) lost = _sentSinceReport;
     _sentSinceReport = 0;
     // UDP losing much of the stream for seconds (a mobile uplink policing
     // it): send over TCP from now on, late rather than lost, at a lower
@@ -544,10 +561,24 @@ class ScreenHost {
         return;
       }
     }
+    // How far behind the viewer is: the newest frame it has against the
+    // newest sent, on this clock. Well behind (TCP queuing what the uplink
+    // cannot carry): drop what waits, start again from a keyframe, ease off.
+    final latest = msg['latestMs'] is num ? (msg['latestMs'] as num).toInt() : -1;
+    if (latest >= 0) _lagMs = max(0, ((_lastSentTs - latest) & 0xFFFFFFFF).toSigned(32));
+    final now = _clock.elapsedMilliseconds;
+    if (_lagMs > behindMs && now - _behindAt > 1500) {
+      _behindAt = now;
+      _pacer.clear();
+      _awaitKey = true;
+      _keyframeAt = -1000; // this one must not wait for the limiter
+      _keyframe();
+    }
     final changed = _rate.report(
         received: received,
         lost: lost,
-        trendMs: msg['owdTrendMs'] is num ? (msg['owdTrendMs'] as num).toDouble() : 0.0);
+        trendMs: msg['owdTrendMs'] is num ? (msg['owdTrendMs'] as num).toDouble() : 0.0,
+        lagMs: _lagMs.toDouble());
     if (changed != null) capture.setBitrate(changed);
   }
 
@@ -571,6 +602,7 @@ class ScreenHost {
       'width': _width,
       'senderDrops': _pacer.dropped,
       'transport': overTcp ? 'tcp' : 'udp',
+      'lagMs': _lagMs,
       'pipeline': 'Android MediaCodec',
     });
     _statsAt = now;

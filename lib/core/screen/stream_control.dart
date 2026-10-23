@@ -18,11 +18,13 @@ class BitrateControl {
   int _cooldown = 0;
 
   /// Applies one viewer report; returns the new bitrate when it changed.
-  int? report({required int received, required int lost, double trendMs = 0}) {
+  /// [lagMs]: how far behind the viewer is; a queue building on the path
+  /// (TCP never loses, it waits).
+  int? report({required int received, required int lost, double trendMs = 0, double lagMs = 0}) {
     if (_cooldown > 0) _cooldown--;
     final total = received + lost;
     if (total == 0) return null;
-    final congested = lost / total > 0.05 || trendMs > 15;
+    final congested = lost / total > 0.05 || trendMs > 15 || lagMs > 300;
     int next;
     if (congested) {
       if (_cooldown > 0) return null;
