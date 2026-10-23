@@ -1,7 +1,7 @@
 name: uconnect_mobile
 description: "uConnect for phones and tablets: browse and share files with your computers, end-to-end encrypted, over the uconnect library."
 publish_to: 'none'
-version: 0.1.0
+version: 0.2.0+2
 
 environment:
   sdk: ^3.5.0

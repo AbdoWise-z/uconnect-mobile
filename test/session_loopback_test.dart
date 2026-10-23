@@ -80,9 +80,9 @@ void main() {
 
     final creds = TopicCreds.generate();
     await a.start(SessionOptions(
-        server: '127.0.0.1:$port', creds: creds, forceRelay: true));
+        server: '127.0.0.1:$port', creds: creds, relayMode: 1));
     await b.start(SessionOptions(
-        server: '127.0.0.1:$port', creds: creds, forceRelay: true));
+        server: '127.0.0.1:$port', creds: creds, relayMode: 1));
   });
 
   tearDownAll(() async {

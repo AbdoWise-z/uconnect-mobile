@@ -186,6 +186,19 @@ class MainActivity : FlutterActivity() {
             }
     }
 
+    override fun onDestroy() {
+        val ending = !isChangingConfigurations
+        super.onDestroy()
+        if (ending) {
+            // The Flutter engine, which owns the session, goes with this
+            // activity. Its native node would otherwise live on in this process
+            // (kept alive by the foreground service) as a ghost device: end the
+            // process so every socket closes and the server drops the node.
+            UconnectService.stop(applicationContext)
+            android.os.Process.killProcess(android.os.Process.myPid())
+        }
+    }
+
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
         // The screen rotated while we may be sharing it: rebuild the capture at

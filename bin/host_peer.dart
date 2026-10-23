@@ -51,7 +51,7 @@ Future<void> main(List<String> args) async {
   }));
 
   await session.start(
-      SessionOptions(server: server, creds: creds, forceRelay: true));
+      SessionOptions(server: server, creds: creds, relayMode: 1));
 
   var announced = false;
   session.changed.listen((_) {

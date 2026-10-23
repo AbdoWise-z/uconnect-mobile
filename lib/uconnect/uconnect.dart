@@ -383,6 +383,14 @@ class UcNode {
     await _events.close();
   }
 
+  /// Shuts the node down now, synchronously: peers and the server are told
+  /// and every socket closes before this returns. For when the app is going
+  /// away and an async [dispose] might never finish; [dispose] still frees.
+  void shutdownNow() {
+    if (_shutdown) return;
+    ucBindings.nodeShutdown(_node);
+  }
+
   Future<T> _blocking<T>(Future<T> Function() run, T whenDown) async {
     if (_shutdown) return whenDown;
     _inflight++;

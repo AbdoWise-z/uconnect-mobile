@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../app/app_state.dart';
 import '../core/session.dart';
 import 'device_view.dart';
+import 'prompt_dialog.dart';
 import 'settings_page.dart';
 import 'theme.dart';
 import 'transfers_view.dart';
@@ -43,6 +44,14 @@ class _WorkspacePageState extends State<WorkspacePage> {
               icon: const Icon(Icons.refresh),
               tooltip: 'Refresh now',
               onPressed: () => state.session.refreshNow(),
+            ),
+          if (_tab == 0)
+            IconButton(
+              icon: const Icon(Icons.logout),
+              tooltip: 'Leave topic',
+              onPressed: () async {
+                if (await confirmLeaveTopic(context)) await state.leaveTopic();
+              },
             ),
         ],
         bottom: PreferredSize(

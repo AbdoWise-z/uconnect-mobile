@@ -69,6 +69,9 @@ class AppStore {
 
   String server = '';
   String topicUri = '';
+
+  /// The invite link of the topic last left, offered again on the connect page.
+  String lastTopicUri = '';
   String deviceName = '';
   bool offerStorage = true;
   bool offerScreen = false;
@@ -109,6 +112,8 @@ class AppStore {
     if (decoded is! Map) return;
     server = decoded['server'] is String ? decoded['server'] as String : '';
     topicUri = decoded['topic'] is String ? decoded['topic'] as String : '';
+    lastTopicUri =
+        decoded['lastTopic'] is String ? decoded['lastTopic'] as String : '';
     deviceName =
         decoded['deviceName'] is String ? decoded['deviceName'] as String : '';
     offerStorage = decoded['offerStorage'] is bool
@@ -178,6 +183,7 @@ class AppStore {
     final data = <String, Object?>{
       'server': server,
       'topic': topicUri,
+      'lastTopic': lastTopicUri,
       'deviceName': deviceName,
       'offerStorage': offerStorage,
       'offerScreen': offerScreen,

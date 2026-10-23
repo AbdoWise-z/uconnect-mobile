@@ -348,6 +348,17 @@ class _SettingsPageState extends State<SettingsPage> {
           onTap: () => _changeTopic(context),
         ),
         SettingsTile(
+          icon: Icons.logout,
+          iconColor: UcColors.error,
+          title: 'Leave this topic',
+          subtitle: 'Go offline until you join one again',
+          onTap: () async {
+            if (!await confirmLeaveTopic(context) || !context.mounted) return;
+            Navigator.of(context).popUntil((r) => r.isFirst);
+            await state.leaveTopic();
+          },
+        ),
+        SettingsTile(
           icon: Icons.dns_outlined,
           title: 'Rendezvous server',
           subtitle: state.store.server.isEmpty ? 'Not set' : state.store.server,
@@ -492,7 +503,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final defaults = state.store.defaultPermissions;
     final byService = <String, List<PermissionInfo>>{};
     for (final info in permissionTable) {
-      if (info.available && !info.trustedOnly) {
+      if (info.available) {
         byService.putIfAbsent(info.service, () => []).add(info);
       }
     }
@@ -501,11 +512,20 @@ class _SettingsPageState extends State<SettingsPage> {
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
         child: Text(
           'What a device may do here when no special or network rule covers '
-          'it, including devices whose identity is unknown. Sensitive '
-          'permissions (camera, screen, remote control) cannot be defaults.',
+          'it, including devices whose identity is unknown.',
           style: TextStyle(fontSize: 13, color: UcColors.textSecondary),
         ),
       ),
+      if (defaults.any(isSensitivePermission))
+        SettingsSection(children: [
+          SettingsTile(
+            icon: Icons.warning_amber_outlined,
+            iconColor: UcColors.warning,
+            title: 'Every device in the topic gets these',
+            subtitle: 'Camera, screen or control is on for any device, known '
+                'or not. Special or network rules are usually the better place.',
+          ),
+        ]),
       for (final entry in byService.entries)
         SettingsSection(title: _serviceLabel(entry.key), children: [
           for (final info in entry.value)

@@ -1,5 +1,28 @@
 import 'package:flutter/material.dart';
 
+/// Asks before leaving the topic; true when the user confirms.
+Future<bool> confirmLeaveTopic(BuildContext context) async =>
+    await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.logout),
+        title: const Text('Leave this topic?'),
+        content: const Text(
+            'This phone goes offline: your devices no longer see it, and '
+            'sharing and folder sync stop. Its rules and synced folders are '
+            'kept, and you can rejoin from the next screen.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Leave')),
+        ],
+      ),
+    ) ==
+    true;
+
 /// Shows a single-text-field prompt dialog and returns the trimmed text, or
 /// null if cancelled.
 Future<String?> askText(BuildContext context, String title,

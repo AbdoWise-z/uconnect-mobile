@@ -1,6 +1,6 @@
-// First-run page: the rendezvous server and the topic's invite link, the two
-// things a device needs before it can meet the others; the mobile analogue of
-// the desktop's FirstRunPage/ConnectPage.
+// Shown while not in a topic (first run, or after leaving one): the rendezvous
+// server and the topic's invite link, the two things a device needs before it
+// can meet the others; the mobile analogue of the desktop's FirstRunPage.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -18,7 +18,10 @@ class ConnectPage extends StatefulWidget {
 
 class _ConnectPageState extends State<ConnectPage> {
   late final _server = TextEditingController(text: widget.state.store.server);
-  late final _link = TextEditingController(text: widget.state.store.topicUri);
+  late final _link = TextEditingController(
+      text: widget.state.store.topicUri.isNotEmpty
+          ? widget.state.store.topicUri
+          : widget.state.store.lastTopicUri);
   String _error = '';
   bool _busy = false;
 
@@ -83,8 +86,15 @@ class _ConnectPageState extends State<ConnectPage> {
     if (text.isNotEmpty) _link.text = text;
   }
 
+  Future<void> _rejoin() async {
+    _link.text = widget.state.store.lastTopicUri;
+    await _connect();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final left = widget.state.store.lastTopicUri;
+    final leftId = left.length > 16 ? left.substring(8, 16) : '';
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -105,12 +115,50 @@ class _ConnectPageState extends State<ConnectPage> {
                           color: UcColors.text)),
                   const SizedBox(height: 4),
                   Text(
-                    'Your devices, connected: browse and share files with your '
-                    'computers, end-to-end encrypted.',
+                    left.isEmpty
+                        ? 'Your devices, connected: browse and share files with '
+                            'your computers, end-to-end encrypted.'
+                        : 'Not connected. Join a topic to see your devices.',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: UcColors.textSecondary),
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 28),
+                  if (left.isNotEmpty && widget.state.store.server.isNotEmpty) ...[
+                    Container(
+                      padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+                      decoration: BoxDecoration(
+                        color: UcColors.panel,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: UcColors.border),
+                      ),
+                      child: Row(children: [
+                        Icon(Icons.history, color: UcColors.accent),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Last topic',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      color: UcColors.text)),
+                              Text('$leftId… on ${widget.state.store.server}',
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      fontFamily: 'monospace',
+                                      color: UcColors.textSecondary)),
+                            ],
+                          ),
+                        ),
+                        FilledButton.tonal(
+                          onPressed: _busy ? null : _rejoin,
+                          child: const Text('Rejoin'),
+                        ),
+                      ]),
+                    ),
+                    const SizedBox(height: 24),
+                  ],
                   TextField(
                     controller: _server,
                     decoration: const InputDecoration(

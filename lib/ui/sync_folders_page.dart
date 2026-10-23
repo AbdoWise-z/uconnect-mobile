@@ -146,8 +146,14 @@ class SyncFoldersPage extends StatelessWidget {
                 title: 'On this phone',
                 footer: 'A synced folder stays the same on every device it is shared '
                     'with: a change on any of them reaches the others. Only devices '
-                    'that proved their identity take part, as you choose per folder.',
+                    'you gave special rules take part, as you choose per folder.',
                 children: [
+                  if (folders.isEmpty)
+                    SettingsTile(
+                      icon: Icons.folder_off_outlined,
+                      iconColor: UcColors.textDisabled,
+                      title: 'No synced folders yet',
+                    ),
                   for (final c in folders)
                     SettingsTile(
                       icon: Icons.folder_copy_outlined,
@@ -157,13 +163,17 @@ class SyncFoldersPage extends StatelessWidget {
                       onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
                           builder: (_) => SyncFolderPage(state: state, id: c.id))),
                     ),
-                  SettingsTile(
-                    icon: Icons.create_new_folder_outlined,
-                    title: 'New synced folder',
-                    onTap: () => _create(context),
-                  ),
                 ],
               ),
+              SettingsSection(children: [
+                SettingsTile(
+                  icon: Icons.create_new_folder_outlined,
+                  iconColor: UcColors.accent,
+                  title: 'New synced folder',
+                  subtitle: 'Share a folder on this phone with your devices.',
+                  onTap: () => _create(context),
+                ),
+              ]),
               if (offers.isNotEmpty)
                 SettingsSection(
                   title: 'Offered to you',
@@ -193,13 +203,11 @@ class SyncFolderPage extends StatelessWidget {
   final AppState state;
   final String id;
 
-  // Devices that can be members: those with special rules, proven devices
-  // connected now, and anyone already a member.
+  // Devices that can be members: those with special rules (only they sync),
+  // and anyone already a member, so they can be removed.
   List<String> _candidates(FolderConfig c) {
     final keys = <String>{
       ...state.store.special.keys,
-      for (final p in state.session.peers.values)
-        if (p.identityState == 'verified') p.identityKey,
       ...c.peers.keys,
     }..remove('');
     return keys.toList()
@@ -275,6 +283,7 @@ class SyncFolderPage extends StatelessWidget {
                   for (final key in _candidates(c))
                     _MemberRow(
                       name: state.deviceNameForKey(key),
+                      special: state.store.special.containsKey(key),
                       fingerprint: fingerprintOfHex(key),
                       online: _online(key),
                       grant: c.grantOf(key),
@@ -286,8 +295,8 @@ class SyncFolderPage extends StatelessWidget {
                       icon: Icons.devices_other,
                       iconColor: UcColors.textDisabled,
                       title: 'No devices yet',
-                      subtitle: 'Your devices appear here once they connect and prove '
-                          'their identity.',
+                      subtitle: 'Folders sync only with devices you gave special '
+                          'rules: add them from its device page.',
                     ),
                 ],
               ),
@@ -363,6 +372,7 @@ class _MemberRow extends StatelessWidget {
     required this.name,
     required this.fingerprint,
     required this.online,
+    required this.special,
     required this.grant,
     required this.onChanged,
   });
@@ -370,6 +380,7 @@ class _MemberRow extends StatelessWidget {
   final String name;
   final String fingerprint;
   final bool online;
+  final bool special;
   final Grant grant;
   final ValueChanged<Grant> onChanged;
 
@@ -405,6 +416,9 @@ class _MemberRow extends StatelessWidget {
                 Text(fingerprint,
                     style: TextStyle(
                         fontSize: 11, fontFamily: 'monospace', color: UcColors.textSecondary)),
+                if (!special)
+                  Text('Not syncing: no special rules',
+                      style: TextStyle(fontSize: 11, color: UcColors.warning)),
               ],
             ),
           ),

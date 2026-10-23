@@ -274,7 +274,7 @@ class Session {
         return (normalizePermissions(_policy.rules[rule].permissions), 'rule');
       }
     }
-    return (withoutSensitive(normalizePermissions(_policy.defaults)), 'default');
+    return (normalizePermissions(_policy.defaults), 'default');
   }
 
   /// The peer's direct-connection address, or null when relayed or unknown.
@@ -343,6 +343,14 @@ class Session {
     _pollTimer = Timer.periodic(_pollEvery, (_) => _poll());
     log('Joined topic ${shortId(_topic)} on ${options.server}');
     unawaited(_poll());
+  }
+
+  /// Ends the node's connections right away (see [UcNode.shutdownNow]), so a
+  /// process that outlives the app doesn't leave this device in the topic.
+  void stopNow() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _node?.shutdownNow();
   }
 
   Future<void> stop() async {

@@ -26,7 +26,7 @@ class PermissionInfo {
     required this.label,
     required this.description,
     this.available = true,
-    this.trustedOnly = false,
+    this.sensitive = false,
   });
 
   final String id;
@@ -34,7 +34,9 @@ class PermissionInfo {
   final String label; // short, shown next to a switch
   final String description; // one sentence: what the other device can do
   final bool available; // false while the action itself does not exist yet
-  final bool trustedOnly;
+  /// Camera, screen, control, display: worth a second thought before
+  /// granting it widely (as a default or a broad network rule).
+  final bool sensitive;
 }
 
 /// What this app can serve today: storage fully; screen/control/camera
@@ -68,66 +70,64 @@ const List<PermissionInfo> permissionTable = [
       label: 'View',
       description: 'Watch this device\'s camera.',
       available: true,
-      trustedOnly: true),
+      sensitive: true),
   PermissionInfo(
       id: Perm.cameraDirect,
       service: 'camera',
       label: 'Without asking',
       description:
-          'View the camera without a consent prompt. Only through special or network rules.',
+          'View the camera without a consent prompt.',
       available: true,
-      trustedOnly: true),
+      sensitive: true),
   PermissionInfo(
       id: Perm.screenView,
       service: 'screen',
       label: 'View',
       description: 'Watch this device\'s screen.',
       available: true,
-      trustedOnly: true),
+      sensitive: true),
   PermissionInfo(
       id: Perm.screenDirect,
       service: 'screen',
       label: 'Without asking',
       description:
-          'View the screen without a consent prompt. Only through special or network rules.',
+          'View the screen without a consent prompt.',
       available: true,
-      trustedOnly: true),
+      sensitive: true),
   PermissionInfo(
       id: Perm.controlInput,
       service: 'control',
       label: 'Control',
       description: 'Tap, swipe, scroll and type on this device while watching its screen.',
       available: true,
-      trustedOnly: true),
+      sensitive: true),
   PermissionInfo(
       id: Perm.controlDirect,
       service: 'control',
       label: 'Without asking',
       description:
-          'Control this device without a consent prompt. Only through special or network rules.',
+          'Control this device without a consent prompt.',
       available: true,
-      trustedOnly: true),
+      sensitive: true),
   PermissionInfo(
       id: Perm.displayShow,
       service: 'display',
       label: 'Use as display',
       description: 'Ask to use this device\'s screen as an extra monitor.',
       available: false,
-      trustedOnly: true),
+      sensitive: true),
   PermissionInfo(
       id: Perm.displayDirect,
       service: 'display',
       label: 'Without asking',
       description:
-          'Use this device\'s screen as a monitor without a consent prompt. Only through special or network rules.',
+          'Use this device\'s screen as a monitor without a consent prompt.',
       available: false,
-      trustedOnly: true),
+      sensitive: true),
 ];
 
 bool isKnownPermission(String id) => permissionTable.any((p) => p.id == id);
 
-bool isTrustedOnlyPermission(String id) =>
-    permissionTable.any((p) => p.id == id && p.trustedOnly);
 
 /// A saved grant of `storage.download`, from an earlier protocol revision,
 /// means `storage.read`.
@@ -136,10 +136,7 @@ Set<String> normalizePermissions(Iterable<String> ids) => {
         if (id == 'storage.download') Perm.storageRead else id
     };
 
-/// Sensitive permissions (camera, screen, control, display -- `trustedOnly`
-/// in the table) come only from special or network rules, never the defaults.
-bool isSensitivePermission(String id) => isTrustedOnlyPermission(id);
-
-/// [permissions] without the sensitive ones: what the defaults may hold.
-Set<String> withoutSensitive(Set<String> permissions) =>
-    {...permissions}..removeWhere(isSensitivePermission);
+/// Sensitive permissions (camera, screen, control, display): any source may
+/// grant them, but the UI warns when they reach many devices.
+bool isSensitivePermission(String id) =>
+    permissionTable.any((p) => p.id == id && p.sensitive);

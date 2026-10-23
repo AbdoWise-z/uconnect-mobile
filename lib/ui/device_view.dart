@@ -97,12 +97,24 @@ class DeviceView extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(p.displayName,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w600,
-                        color: UcColors.text)),
+                Row(children: [
+                  Flexible(
+                    child: Text(p.displayName,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w600,
+                            color: UcColors.text)),
+                  ),
+                  if (p.special) ...[
+                    const SizedBox(width: 6),
+                    Tooltip(
+                      message: 'Special rules',
+                      child: Icon(Icons.verified_user,
+                          size: 20, color: UcColors.success),
+                    ),
+                  ],
+                ]),
                 const SizedBox(height: 4),
                 Row(
                   children: [
@@ -118,7 +130,6 @@ class DeviceView extends StatelessWidget {
                       [
                         stateName(p.stateCode),
                         if (p.hasHello && p.os.isNotEmpty) p.os,
-                        if (p.special) 'special rules',
                       ].join(' · '),
                       style: TextStyle(
                           fontSize: 13, color: UcColors.textSecondary),
@@ -211,7 +222,8 @@ class DeviceView extends StatelessWidget {
     return _card('Identity & rules', [
       _row('Status', stateText, color: stateColor_),
       if (p.fingerprint.isNotEmpty) _row('Fingerprint', p.fingerprint),
-      if (p.address.isNotEmpty) _row('Address', p.address),
+      _row('Connected from',
+          p.address.isNotEmpty ? p.address : 'relayed through the server'),
       _row('Rules', rulesText, color: rulesColor),
       const SizedBox(height: 8),
       if (p.identityState == 'verified' && !p.special)
@@ -266,8 +278,8 @@ class DeviceView extends StatelessWidget {
             const SizedBox(height: 12),
             Text(
               'Its special rules start from what it may do now and come '
-              'before network rules and defaults. They may include sensitive '
-              'permissions: screen, camera, remote control.',
+              'before network rules and defaults. Folders sync only with '
+              'devices that have special rules.',
               style: TextStyle(color: UcColors.textSecondary, fontSize: 12),
             ),
           ],
@@ -336,9 +348,9 @@ class DeviceView extends StatelessWidget {
     final note = switch (p.permissionSource) {
       'device' => 'Its special rules. Changes apply right away.',
       'rule' => 'From the network rule ${rule?.displayName ?? ''}, because it '
-          'connects from ${p.address}. Add special rules to give it its own.',
+          'connects from ${p.address}.',
       _ => 'Your default permissions, which any device with the invite link '
-          'gets. Add special rules to give it its own.',
+          'gets.',
     };
     return _card('What it may do here', [
       Padding(
@@ -346,7 +358,37 @@ class DeviceView extends StatelessWidget {
         child: Text(note,
             style: TextStyle(fontSize: 12, color: UcColors.textSecondary)),
       ),
-      ...rows,
+      if (!editable)
+        Container(
+          margin: const EdgeInsets.only(top: 4, bottom: 6),
+          padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+          decoration: BoxDecoration(
+            color: UcColors.canvas,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: UcColors.border),
+          ),
+          child: Row(children: [
+            Icon(Icons.lock_outline, size: 18, color: UcColors.textSecondary),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text('Add special rules to change these for this device.',
+                  style: TextStyle(fontSize: 12, color: UcColors.textSecondary)),
+            ),
+            TextButton(
+              onPressed: () => _showSpecialRulesDialog(context, p),
+              child: const Text('Add'),
+            ),
+          ]),
+        ),
+      // Read-only until it has special rules: dimmed so it reads as such.
+      Opacity(
+        opacity: editable ? 1 : 0.45,
+        child: IgnorePointer(
+          ignoring: !editable,
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start, children: rows),
+        ),
+      ),
     ]);
   }
 

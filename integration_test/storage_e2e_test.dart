@@ -73,7 +73,7 @@ void main() {
     await session.start(SessionOptions(
       server: server,
       creds: TopicCreds.parse(topic)!,
-      forceRelay: true,
+      relayMode: 1, // RelayMode.always
     ));
   });
 

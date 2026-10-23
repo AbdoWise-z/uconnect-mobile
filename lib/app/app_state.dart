@@ -287,6 +287,18 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Leaves the topic: disconnects, stops sharing, and forgets the link (kept
+  /// as [AppStore.lastTopicUri] to rejoin), so the app shows the connect page.
+  Future<void> leaveTopic() async {
+    await screenHost.stop();
+    await cameraHost.stop();
+    await session.stop();
+    if (store.topicUri.isNotEmpty) store.lastTopicUri = store.topicUri;
+    store.topicUri = '';
+    await store.save();
+    notifyListeners();
+  }
+
   /// Creates a new keyed topic locally and stores its invite link.
   Future<String?> createTopic() async {
     final creds = TopicCreds.generate();
@@ -400,10 +412,15 @@ class AppState extends ChangeNotifier {
       sendControl: (dev, msg) => session.sendControl(dev, msg),
       sendData: (dev, id, bytes) =>
           session.sendFrame(dev, MessageKind.syncData, id, bytes),
-      // Only a proven peer takes part; each folder's grants then name who.
+      // Only a proven peer with special rules takes part (network rules and
+      // defaults never reach sync); each folder's grants then name which.
       peerKey: (dev) {
         final p = session.peers[dev];
-        return p != null && p.identityState == 'verified' ? p.identityKey : null;
+        return p != null &&
+                p.identityState == 'verified' &&
+                store.special.containsKey(p.identityKey)
+            ? p.identityKey
+            : null;
       },
       connectedSince: (dev) => session.peers[dev]?.connectedAt ?? -1,
       myKeyHex: identity!.publicKeyHex,
@@ -436,13 +453,18 @@ class AppState extends ChangeNotifier {
     store.syncFolders = folders;
     await store.save();
     sync.setFolders(folders);
-    // Grants may have changed: let connected, proven peers hear about it.
+    _resyncPeers();
+    notifyListeners();
+  }
+
+  // Grants or special rules may have changed: let connected, proven peers
+  // hear about it (one that lost its special rules drops out of sync).
+  void _resyncPeers() {
     for (final p in session.peers.values) {
       if (p.stateCode == ucPeerConnected && p.identityState == 'verified') {
         sync.peerUp(p.devId);
       }
     }
-    notifyListeners();
   }
 
   FolderConfig? syncFolder(String id) {
@@ -495,7 +517,7 @@ class AppState extends ChangeNotifier {
 
   /// Joins a folder a proven device offers: it is sent here and accepted from.
   Future<bool> joinSyncFolder(String peerKey, String id, String label, String path) async {
-    if (syncFolder(id) != null) return false;
+    if (syncFolder(id) != null || !store.special.containsKey(peerKey)) return false;
     await Directory(path).create(recursive: true);
     await _saveSyncFolders([
       ...store.syncFolders,
@@ -552,7 +574,7 @@ class AppState extends ChangeNotifier {
     for (final p in session.peers.values) {
       if (p.identityKey == keyHex) return p.permissions.toSet();
     }
-    return withoutSensitive(normalizePermissions(store.defaultPermissions));
+    return normalizePermissions(store.defaultPermissions);
   }
 
   /// Gives a device special rules, starting from what it may do now.
@@ -561,6 +583,7 @@ class AppState extends ChangeNotifier {
         keyHex, () => SpecialRules(keyHex, name, _currentPermissionsOf(keyHex)));
     await store.save();
     _applyLocalConfig();
+    _resyncPeers();
   }
 
   /// Drops a device's special rules: network rules and defaults apply again.
@@ -568,6 +591,7 @@ class AppState extends ChangeNotifier {
     store.special.remove(keyHex);
     await store.save();
     _applyLocalConfig();
+    _resyncPeers();
   }
 
   /// Sets a device's special rules (adding them if it had none).
@@ -577,10 +601,11 @@ class AppState extends ChangeNotifier {
     t.permissions = perms;
     await store.save();
     _applyLocalConfig();
+    _resyncPeers();
   }
 
   Future<void> setDefaultPermissions(Set<String> perms) async {
-    store.defaultPermissions = withoutSensitive(perms);
+    store.defaultPermissions = perms;
     await store.save();
     _applyLocalConfig();
   }
@@ -630,6 +655,9 @@ class AppState extends ChangeNotifier {
   /// Tears the live connection down without disposing the notifier; called
   /// when the OS is detaching the engine, so the native node does not linger.
   void shutdown() {
+    // First, synchronously: the async stops below may never finish once the
+    // engine is torn down, and the node would linger as a ghost device.
+    session.stopNow();
     unawaited(_background.stop());
     unawaited(screenHost.stop());
     unawaited(cameraHost.stop());
