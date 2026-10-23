@@ -6,6 +6,8 @@
 // desktop's worker-thread poll does (publish, lookup, reconnect).
 
 import 'dart:async';
+
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'dart:io' show InternetAddress, Platform;
 import 'dart:typed_data';
 
@@ -237,6 +239,7 @@ class Session {
     _log.add(stamped);
     if (_log.length > 500) _log.removeRange(0, _log.length - 500);
     _logChanged.add(stamped);
+    if (kDebugMode) debugPrint('[session] $line'); // in logcat too while developing
   }
 
   void _notify() {

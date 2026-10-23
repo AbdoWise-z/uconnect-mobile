@@ -470,9 +470,6 @@ class ScreenHost {
 
   void _adaptQuality(MediaSender media) {
     if (_resizing || !_canResize) return;
-    // A change costs a keyframe and takes a moment to show in the rates:
-    // one at a time, a second and a half apart.
-    if (_now - _qualityChangedMs < 1500) return;
     final bps = media.smoothedEncoderBps;
     final atFps = (_maxFps / 30).clamp(0.5, 4.0);
     final down = media.pathLimited && !media.applicationLimited;
@@ -501,8 +498,22 @@ class ScreenHost {
       width = _rungs[current - 1]; // up a rung
     }
     width = min(width, _maxWidth);
-    if (width != _askWidth || fps != _fps) unawaited(_resize(width, fps));
+    // A change costs a keyframe and takes a moment to show in the rates, and
+    // the estimate wanders: a step down waits for the path to have shown its
+    // limit for 2 s, a step up for 5 s of headroom, and neither comes within
+    // 3 s of the last change.
+    final now = _now;
+    final wantsDown = width < _askWidth || fps < _fps, wantsUp = width > _askWidth || fps > _fps;
+    _downSinceMs = wantsDown ? (_downSinceMs < 0 ? now : _downSinceMs) : -1;
+    _upSinceMs = wantsUp ? (_upSinceMs < 0 ? now : _upSinceMs) : -1;
+    final due = (wantsDown && now - _downSinceMs >= 2000) || (wantsUp && now - _upSinceMs >= 5000);
+    if (due && now - _qualityChangedMs >= 3000) {
+      _downSinceMs = _upSinceMs = -1;
+      unawaited(_resize(width, fps));
+    }
   }
+
+  int _downSinceMs = -1, _upSinceMs = -1; // since when a step down or up has been called for
 
   Future<void> _resize(int width, int fps) async {
     final dev = _viewer;
