@@ -85,10 +85,12 @@ class MediaSender {
       dropped++;
       return false;
     }
-    // Repair packets in proportion to what the path loses: none when it is
-    // clean, one per two fragments when it loses a lot.
-    final loss = _bwe.lossRate;
-    fecGroup = reliable || loss < 0.02 ? 0 : loss < 0.08 ? 8 : loss < 0.20 ? 4 : 2;
+    // Repair packets in proportion to what the path loses, sized for its
+    // spells of loss rather than the mean: none when it is clean, one per
+    // two fragments when it loses a lot, one per fragment (each sent twice,
+    // in effect) when it loses most of a spell.
+    final loss = max(_bwe.lossRate, _bwe.burstLossRate);
+    fecGroup = reliable || loss < 0.02 ? 0 : loss < 0.08 ? 8 : loss < 0.20 ? 4 : loss < 0.40 ? 2 : 1;
     // A keyframe is big and everything after it depends on it: protected
     // more, so it needs fewer repeats.
     final group = frame.keyframe && fecGroup > 2 ? 2 : fecGroup;

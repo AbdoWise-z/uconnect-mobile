@@ -113,4 +113,8 @@ class CameraCaptureController implements VideoSource {
 
   @override
   Future<void> stop() => _channel.invokeMethod<void>('stop');
+
+  // A camera keeps the size and rate it was started with.
+  @override
+  Future<Size> resize({required int width, required int fps}) async => Size.zero;
 }

@@ -79,6 +79,11 @@ class ScreenHost {
   int _width = 0;
   int _height = 0;
   int _fps = 30;
+  // The quality asked for (bounded by the caps) and the rung in use: the
+  // bound on the long side the encoder is given, stepped down while the path
+  // is thin (see _adaptQuality).
+  int _maxWidth = 1920, _maxFps = 60, _askWidth = 1920;
+  bool _resizing = false, _canResize = true;
   // The media session toward the viewer: pacing, repair, the rate estimate.
   MediaSender? _media;
   int _encoderBps = 0; // what the encoder was last told
@@ -227,7 +232,9 @@ class ScreenHost {
     var maxFps = _intf(msg, 'maxFps');
     if (maxFps <= 0) maxFps = 60;
     if (maxFpsCap > 0) maxFps = min(maxFps, maxFpsCap);
-    _fps = maxFps.clamp(1, 120);
+    _fps = _maxFps = maxFps.clamp(1, 120);
+    _maxWidth = _askWidth = maxWidth;
+    _canResize = true;
     // The viewer may ask for less than this device allows, never more.
     final asked = _intf(msg, 'maxBitrate');
     final allowed = maxBitrateCap > 0 ? maxBitrateCap : 16000000;
@@ -444,6 +451,74 @@ class ScreenHost {
     if ((bps - _encoderBps).abs() * 10 > _encoderBps) {
       _encoderBps = bps;
       capture.setBitrate(bps);
+    }
+    _adaptQuality(media);
+  }
+
+  // The quality ladder (as the desktop's ScreenService::adaptQuality): the
+  // bitrate the path allows buys so many pixels and frames for a clean
+  // picture; down a rung at a time and up again only with room to spare
+  // (each change rebuilds the encoder, which starts over with a keyframe).
+  // Stepping down is only for a path that has shown its limit, and only while
+  // the source asks for more than it gets: a simple picture needing little is
+  // not a slow path.
+  static const _rungs = [3840, 2560, 1920, 1280, 854];
+  static const _needs = [8000000, 4000000, 2000000, 800000, 0]; // at 30 fps
+
+  void _adaptQuality(MediaSender media) {
+    if (_resizing || !_canResize) return;
+    final bps = media.encoderBps;
+    final atFps = (_maxFps / 30).clamp(0.5, 4.0);
+    final down = media.pathLimited && !media.applicationLimited;
+    // Frame rate first: under about half a megabit even the smallest picture
+    // needs fewer frames to stay clean.
+    var fps = _maxFps;
+    if (down && bps < 250000) {
+      fps = min(fps, 10);
+    } else if (down && (bps < 400000 || (_fps <= 15 && bps < 520000))) {
+      fps = min(fps, 15);
+    } else if (!down && _fps < _maxFps && bps < 520000) {
+      fps = _fps; // no room yet to go back up
+    }
+    var width = _askWidth;
+    var rung = 0;
+    while (rung < 4 && _rungs[rung] > _maxWidth) {
+      rung++;
+    }
+    var current = 0;
+    while (current < 4 && _rungs[current] > width) {
+      current++;
+    }
+    final scale = fps >= 30 ? atFps : 0.6;
+    if (down && bps < _needs[current] * scale * 0.8 && current < 4) {
+      width = _rungs[current + 1]; // down a rung
+    } else if (current > rung && bps > _needs[current - 1] * scale * 1.3) {
+      width = _rungs[current - 1]; // up a rung
+    }
+    width = min(width, _maxWidth);
+    if (width != _askWidth || fps != _fps) unawaited(_resize(width, fps));
+  }
+
+  Future<void> _resize(int width, int fps) async {
+    final dev = _viewer;
+    final media = _media;
+    if (dev == null || media == null) return;
+    _resizing = true;
+    try {
+      final size = await capture.resize(width: width, fps: fps);
+      if (_viewer != dev || _media != media) return; // another session by now
+      if (size.width == 0) {
+        _canResize = false; // the source cannot (a camera): its quality stays
+        return;
+      }
+      _askWidth = width;
+      _fps = fps;
+      media.fps = fps;
+      _width = size.width.toInt();
+      _height = size.height.toInt();
+      _notify();
+    } finally {
+      _resizing = false;
     }
   }
 

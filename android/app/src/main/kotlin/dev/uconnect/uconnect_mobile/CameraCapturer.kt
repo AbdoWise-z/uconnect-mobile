@@ -252,12 +252,20 @@ class CameraCapturer(
                 MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, capBitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, capFps)
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+            // No keyframe on a schedule: each costs several frames' worth of bytes
+            // and on a thin uplink is what gets lost. The viewer asks for one
+            // when it needs one (requestKeyframe); between, intra refresh
+            // repairs the picture a few rows at a time, within the bitrate.
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1 shl 20)
+            setInteger(MediaFormat.KEY_INTRA_REFRESH_PERIOD, capFps * 2)
+            // A still picture: the last frame again once a second, so the
+            // viewer and the rate estimate keep hearing from the encoder.
+            setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 1_000_000L)
             setInteger(MediaFormat.KEY_LATENCY, 1)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            // Constant bitrate: the sender paces to the estimate, and a burst
+                // over it (as VBR allows) only queues or is lost.
                 setInteger(MediaFormat.KEY_BITRATE_MODE,
-                    MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
-            }
+                    MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
         }
         val c = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
         c.setCallback(encoderCallback, handler)

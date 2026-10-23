@@ -33,6 +33,10 @@ class BandwidthEstimator {
   final int minBps, maxBps;
   int _target = 0, receiveBps = 0, sendBps = 0, _lastDecreaseBps = 0;
   double lossRate = 0, trendMs = 0, _threshold = overuseThresholdMs, _minRttMs = 0;
+
+  /// The worst recent spell of loss, fading over a couple of seconds: a
+  /// mobile uplink loses in spells, and repair is sized for those.
+  double burstLossRate = 0;
   String state = 'increase';
   int _lastUpdateMs = 0, _overusingSinceMs = -1, _lastLossCutMs = -1000000;
   double _previousTrend = 0;
@@ -129,6 +133,10 @@ class BandwidthEstimator {
     trendMs = _deltas * slope * _trendGain;
     final dt = _lastUpdateMs != 0 ? (nowMs - _lastUpdateMs).toDouble() : 100.0;
     _lastUpdateMs = nowMs;
+    // The worst recent spell, halving every second; a handful of packets
+    // is too few to call a spell.
+    burstLossRate *= pow(0.5, dt / 1000);
+    if (got + lost >= 5) burstLossRate = max(burstLossRate, lost / (got + lost));
     var signal = _detect(trendMs, dt);
     if (signal == _Signal.overuse) {
       if (_overusingSinceMs < 0) _overusingSinceMs = nowMs;

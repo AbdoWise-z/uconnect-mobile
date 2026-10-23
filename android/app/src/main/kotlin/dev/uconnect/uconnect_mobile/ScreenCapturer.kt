@@ -96,6 +96,11 @@ class ScreenCapturer(
                 setBitrate(call.argument<Int>("bitrate") ?: 2_000_000)
                 result.success(null)
             }
+            "resize" -> {
+                val w = call.argument<Int>("width") ?: capReqW
+                val fps = call.argument<Int>("fps") ?: capFps
+                result.success(resize(w, fps))
+            }
             "stop" -> {
                 stop(); result.success(null)
             }
@@ -133,6 +138,23 @@ class ScreenCapturer(
         // in the foreground.
         ScreenCaptureService.start(activity.applicationContext) {
             main.post { result.success(finishStart(data)) }
+        }
+    }
+
+    // Another size or frame rate for the stream (the host steps down when the
+    // path is thin, and back up): the encoder and the mirroring display are
+    // rebuilt on the same projection, so no consent is asked again. Returns
+    // the new encoded size; zero if nothing is being captured.
+    private fun resize(bound: Int, fps: Int): Map<String, Any> {
+        if (projection == null || codec == null) return mapOf("width" to 0, "height" to 0)
+        capReqW = bound; capReqH = bound; capFps = fps
+        return try {
+            val dim = currentDim()
+            buildEncoderAndDisplay(dim)
+            mapOf("width" to dim.width, "height" to dim.height)
+        } catch (t: Throwable) {
+            channel.invokeMethod("error", t.message ?: "re-capture failed")
+            mapOf("width" to 0, "height" to 0)
         }
     }
 
@@ -196,7 +218,15 @@ class ScreenCapturer(
             )
             setInteger(MediaFormat.KEY_BIT_RATE, capBitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, capFps)
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+            // No keyframe on a schedule: each costs several frames' worth of bytes
+            // and on a thin uplink is what gets lost. The viewer asks for one
+            // when it needs one (requestKeyframe); between, intra refresh
+            // repairs the picture a few rows at a time, within the bitrate.
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1 shl 20)
+            setInteger(MediaFormat.KEY_INTRA_REFRESH_PERIOD, capFps * 2)
+            // A still picture: the last frame again once a second, so the
+            // viewer and the rate estimate keep hearing from the encoder.
+            setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 1_000_000L)
             setInteger(MediaFormat.KEY_LATENCY, 1)
             // A surface encoder takes every frame the screen composes (120 Hz
             // on some phones), whatever KEY_FRAME_RATE says: cap it at the
@@ -204,12 +234,10 @@ class ScreenCapturer(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, capFps.toFloat())
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                setInteger(
-                    MediaFormat.KEY_BITRATE_MODE,
-                    MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR
-                )
-            }
+            // Constant bitrate: the sender paces to the estimate, and a burst
+                // over it (as VBR allows) only queues or is lost.
+                setInteger(MediaFormat.KEY_BITRATE_MODE,
+                    MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
         }
         val c = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
         c.setCallback(encoderCallback)

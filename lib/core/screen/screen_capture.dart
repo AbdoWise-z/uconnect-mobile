@@ -33,6 +33,11 @@ abstract class VideoSource {
   Future<void> setBitrate(int bitrate);
   Future<void> stop();
 
+  /// Changes the bound on the long side and the frame rate of a running
+  /// capture (the host steps down on a thin path, and back up); returns the
+  /// new encoded size, or zero if the source cannot (nothing changes then).
+  Future<Size> resize({required int width, required int fps}) async => Size.zero;
+
   /// Human-readable names of the sources on offer (e.g. the cameras). Empty for
   /// a single-source capture like the screen; the host reports these so a
   /// viewer can pick one.
@@ -91,6 +96,12 @@ class CaptureController implements VideoSource {
       _channel.invokeMethod<void>('setBitrate', {'bitrate': bitrate});
 
   Future<void> stop() => _channel.invokeMethod<void>('stop');
+
+  @override
+  Future<Size> resize({required int width, required int fps}) async {
+    final r = await _channel.invokeMapMethod<String, Object?>('resize', {'width': width, 'fps': fps});
+    return Size(((r?['width'] as num?) ?? 0).toDouble(), ((r?['height'] as num?) ?? 0).toDouble());
+  }
 
   // The screen is a single source.
   @override

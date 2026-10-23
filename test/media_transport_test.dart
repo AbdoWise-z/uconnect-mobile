@@ -177,6 +177,15 @@ void main() {
     expect(out.length, 1);
     expect(out[0].bytes, bytes);
     expect(receiver.report().recovered, 3);
+    // A group of one: the repair packet alone rebuilds its fragment.
+    final doubled = MediaReceiver(session: 7, kind: 1);
+    final twice = <EncodedFrame>[];
+    for (final p in packetize(1, frame, SeqCounter(), 1)) {
+      if (p.type == PacketType.media) continue; // every fragment lost
+      twice.addAll(doubled.receive(encodeMedia(p), 10));
+    }
+    expect(twice.length, 1);
+    expect(twice[0].bytes, bytes);
   });
 
   test('repeats fill what was lost', () {
