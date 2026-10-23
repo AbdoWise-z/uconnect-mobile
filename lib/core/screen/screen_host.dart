@@ -1,22 +1,22 @@
 // Host side of screen sharing (docs/protocol.md section 7): this device
 // shares its screen to a peer that asks. It answers scr.request (after a
 // permission check and, unless the peer holds screen.direct, a consent
-// prompt), captures and encodes via CaptureController, fragments each access
-// unit into video datagrams, and honors the viewer's feedback (scr.nack,
-// scr.keyframe, scr.report). One viewer at a time in this version.
+// prompt), captures and encodes via CaptureController, and hands each access
+// unit to a MediaSender, which cuts it into paced, repairable datagrams and
+// reads the viewer's feedback datagrams back (the bandwidth estimate, repeats,
+// keyframe requests). One viewer at a time in this version.
 
 import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show debugPrint;
-
 import '../permissions.dart';
 import '../session.dart';
-import '../../uconnect/uconnect.dart' show ucPathDirect, ucPathRelayed, ucPathTcp;
+import '../../uconnect/uconnect.dart' show ucPathDirect, ucPathTcp;
+import 'media_packet.dart';
+import 'media_sender.dart';
 import 'remote_input.dart';
 import 'screen_capture.dart';
-import 'stream_control.dart';
 
 enum HostState { idle, sharing }
 
@@ -33,6 +33,7 @@ class ScreenHost {
       this.viewPerm = Perm.screenView,
       this.directPerm = Perm.screenDirect}) {
     session.addControlHandler(_onControl);
+    session.addDatagramHandler(_onDatagram);
     session.addPeerStateHandler((dev, state) {
       if (dev == _viewer && (state == 4 || state == 5)) _teardown();
     });
@@ -74,36 +75,22 @@ class ScreenHost {
   String? _viewer; // the watching peer's dev id
   int _request = 0;
   int _session = 0;
-  int _seq = 0;
+  int _frame = 0; // frame numbers, in capture order
   int _width = 0;
   int _height = 0;
   int _fps = 30;
-  // This session's bitrate, within its cap: the settings', or the viewer's if lower.
-  BitrateControl _rate = BitrateControl(bitrate: 8000000, cap: 16000000);
-  // A UDP path that loses too much: the stream moves to TCP (7.2).
-  final _lossy = LossyPath();
-  int _lastSentTs = 0; // capture time of the newest frame sent
-  int _lagMs = 0; // how far behind the viewer is, from its reports
-  int _behindAt = -10000; // when the queue was last dropped for lag
-  bool _awaitKey = false; // dropped the queue: P-frames are useless until a keyframe
-  static const behindMs = 600;
-  static const tcpBitrateCap = 2000000;
-  bool _overTcp = false;
-  int get _bitrate => _rate.bitrate;
-
-  // Each frame's datagrams go out spread over part of a frame interval, not
-  // in one burst (7.2), a keyframe no faster than the bitrate; the frames
-  // behind it wait. _pumpTimer runs while some are waiting.
-  PacedSender _pacer = PacedSender(maxQueuedFrames: 60);
-  Timer? _pumpTimer;
-  // When a keyframe was last asked of the encoder: one is big, and asking
-  // again while it is still going out only floods the uplink.
-  int _keyframeAt = -1000;
+  // The media session toward the viewer: pacing, repair, the rate estimate.
+  MediaSender? _media;
+  int _encoderBps = 0; // what the encoder was last told
+  int _skipped = 0; // frames not sent because the queue was deep
+  Timer? _pumpTimer; // sends what the pacing allows, every few milliseconds
+  Timer? _controlTimer; // the encoder's rate and keyframes, every 200 ms
+  static const int _pumpMs = 3;
 
   // Per-second statistics for the viewer ($prefix.stats).
   final _clock = Stopwatch()..start();
   Timer? _statsTimer;
-  int _statsAt = 0, _statsUnits = 0, _statsBytes = 0;
+  int _statsAt = 0, _statsUnits = 0, _statsBytes = 0, _statsSkipped = 0;
 
   StreamSubscription<CaptureUnit>? _auSub;
   final _changed = StreamController<void>.broadcast();
@@ -111,10 +98,6 @@ class ScreenHost {
   bool get sharing => state == HostState.sharing;
   String? get viewerName =>
       _viewer == null ? null : session.peers[_viewer]?.displayName;
-
-  // Retransmit history: frame seq -> its datagrams, kept briefly for nacks.
-  final _history = <int, List<Uint8List>>{};
-  final _historyOrder = <int>[];
 
   final _rand = Random();
 
@@ -131,11 +114,7 @@ class ScreenHost {
         case 'request':
           _onRequest(dev, msg);
         case 'keyframe':
-          if (_is(msg, 'session') && dev == _viewer) _keyframe();
-        case 'nack':
-          if (_is(msg, 'session') && dev == _viewer) _onNack(msg);
-        case 'report':
-          if (_is(msg, 'session') && dev == _viewer) _onReport(msg);
+          if (_is(msg, 'session') && dev == _viewer) _media?.awaitKey = true;
         case 'monitor':
           if (_is(msg, 'session') && dev == _viewer) {
             unawaited(_switchMonitor(_intf(msg, 'index')));
@@ -187,6 +166,14 @@ class ScreenHost {
         return false;
     }
     return true;
+  }
+
+  // The viewer's feedback comes back on the media channel (7.2).
+  void _onDatagram(String dev, Uint8List d) {
+    final media = _media;
+    if (media == null || dev != _viewer || d.length < 2 || d[0] != videoKind) return;
+    if (packetType(d) != PacketType.feedback) return;
+    media.onFeedback(d, _clock.elapsedMilliseconds);
   }
 
   bool _is(Map<String, Object?> msg, String field) =>
@@ -244,12 +231,19 @@ class ScreenHost {
     // The viewer may ask for less than this device allows, never more.
     final asked = _intf(msg, 'maxBitrate');
     final allowed = maxBitrateCap > 0 ? maxBitrateCap : 16000000;
-    final cap = asked > 0 ? min(allowed, max(asked, BitrateControl.minBitrate)) : allowed;
-    // Direct links start higher; relay/TCP lower (7.2). A phone's uplink
-    // (often cellular) takes less than a desktop's: it starts at half of a
-    // desktop's and climbs while reports stay clean.
+    final cap = asked > 0 ? min(allowed, max(asked, minBitrate)) : allowed;
+    // The estimate starts modestly and climbs as the path proves itself (7.2);
+    // a direct link a little higher. A phone's uplink is often cellular.
     final path = session.node?.datagramPath(session.topicId, dev) ?? 0;
-    _rate = BitrateControl(bitrate: min(cap, path == ucPathDirect ? 4000000 : 1500000), cap: cap);
+    final token = 1 + _rand.nextInt(0xFFFE); // nonzero u16
+    final media = MediaSender(
+      kind: videoKind,
+      session: token,
+      startBps: min(cap, path == ucPathDirect ? 3000000 : 1500000),
+      maxBps: cap,
+      fps: _fps,
+      reliable: path == ucPathTcp,
+    );
 
     // The sources on offer (cameras); the viewer gets this list and may switch.
     final sources = await capture.sources();
@@ -260,11 +254,12 @@ class ScreenHost {
     // The size asked for bounds the long side: a portrait phone screen
     // (1220x2712) asked for at "1080p" is sent at most 1920 tall. Full size,
     // its keyframes are too big for a phone's uplink.
+    _encoderBps = media.encoderBps;
     final size = await capture.start(
       width: maxWidth,
       height: maxWidth, // the source keeps its own aspect
       fps: _fps,
-      bitrate: _bitrate,
+      bitrate: _encoderBps,
     );
     _width = size.width.toInt();
     _height = size.height.toInt();
@@ -275,20 +270,12 @@ class ScreenHost {
 
     _viewer = dev;
     _request = request;
-    _session = 1 + _rand.nextInt(0xFFFE); // nonzero u16
-    _seq = 0;
-    _pacer = PacedSender(maxQueuedFrames: 60);
-    _keyframeAt = -1000;
-    _lossy.reset();
-    _overTcp = false;
-    _lastSentTs = 0;
-    _lagMs = 0;
-    _behindAt = -10000;
-    _awaitKey = false;
+    _session = token;
+    _media = media;
+    _frame = 0;
+    _skipped = 0;
     state = HostState.sharing;
     _controlOn = false;
-    _history.clear();
-    _historyOrder.clear();
 
     // Open the media datagram channel toward the viewer with the fallback the
     // current relay mode allows.
@@ -326,19 +313,13 @@ class ScreenHost {
 
     _auSub = capture.accessUnits().listen(_onAccessUnit);
     _statsAt = _clock.elapsedMilliseconds;
-    _statsUnits = _statsBytes = 0;
+    _statsUnits = _statsBytes = _statsSkipped = 0;
     _statsTimer?.cancel();
     _statsTimer = Timer.periodic(const Duration(seconds: 1), (_) => _sendStats());
-    // The encoder's very first keyframe can be dropped while the media channel
-    // is still opening; force fresh ones over the first second so the viewer
-    // gets a complete reference promptly.
-    for (final ms in [400, 800, 1500]) {
-      Timer(Duration(milliseconds: ms), () {
-        if (state == HostState.sharing && _viewer == dev) {
-          capture.requestKeyframe();
-        }
-      });
-    }
+    _pumpTimer?.cancel();
+    _pumpTimer = Timer.periodic(const Duration(milliseconds: _pumpMs), (_) => _pump());
+    _controlTimer?.cancel();
+    _controlTimer = Timer.periodic(const Duration(milliseconds: 200), (_) => _steer());
     _notify();
   }
 
@@ -394,11 +375,13 @@ class ScreenHost {
     await _auSub?.cancel();
     _auSub = null;
     await capture.stop();
+    // What waits is of the old source; the new one starts at its keyframe.
+    _media?.dropQueued();
     final size = await capture.start(
       width: _width > 0 ? _width : 1280,
       height: (_width > 0 ? _width : 1280) * 2,
       fps: _fps,
-      bitrate: _bitrate,
+      bitrate: _encoderBps,
     );
     if (size.width == 0 || _viewer != dev || state != HostState.sharing) {
       _teardown();
@@ -415,198 +398,85 @@ class ScreenHost {
       'width': _width,
       'height': _height,
     });
-    Timer(const Duration(milliseconds: 300), () {
-      if (state == HostState.sharing && _viewer == dev) _keyframe();
-    });
     _notify();
   }
 
-  static const int _payloadMax = 1084; // 1100-byte datagram minus 16-byte header
-
   void _onAccessUnit(CaptureUnit u) {
-    final dev = _viewer;
-    if (dev == null || state != HostState.sharing) return;
-    final seq = _seq & 0xFFFFFFFF;
-    _seq++;
+    final media = _media;
+    if (media == null || state != HostState.sharing) return;
     _statsUnits++;
     _statsBytes += u.bytes.length;
-    final count = (u.bytes.length + _payloadMax - 1) ~/ _payloadMax;
-    if (count == 0 || count > 0xFFFF) return;
-    final ts = (u.ptsUs ~/ 1000) & 0xFFFFFFFF;
-    if (_awaitKey) {
-      if (!u.keyframe) return;
-      _awaitKey = false;
+    final number = _frame & 0xFFFFFFFF;
+    _frame++;
+    // The queue is deep (the encoder put out more than the path takes): a
+    // frame sent now would only arrive late. The encoder cannot skip a
+    // capture, so the frame is dropped here and, as the ones after it would
+    // be useless without it, the sender waits for a keyframe (asked for below).
+    if (!u.keyframe && media.shouldSkipCapture()) {
+      _skipped++;
+      _statsSkipped++;
+      media.awaitKey = true;
+      return;
     }
-    _lastSentTs = ts;
-    final datagrams = <Uint8List>[];
-    for (var i = 0; i < count; i++) {
-      final start = i * _payloadMax;
-      final end = min(start + _payloadMax, u.bytes.length);
-      final dg = _packet(seq, i, count, u.keyframe, false, ts,
-          Uint8List.sublistView(u.bytes, start, end));
-      datagrams.add(dg);
-    }
-    _remember(seq, datagrams);
-    // A frame that cannot be queued is lost: the next must be a keyframe.
-    if (!_pacer.add(datagrams, _clock.elapsedMilliseconds,
-        intervalMs: 1000 ~/ max(1, _fps), paceBps: max(500000, _bitrate), maxSpreadMs: 500)) {
-      _keyframe();
-    }
+    final frame = EncodedFrame(_session, number, (u.ptsUs ~/ 1000) & 0xFFFFFFFF, u.keyframe, u.bytes);
+    media.enqueue(frame);
     _pump();
   }
 
-  // Asks the encoder for a keyframe, at most once a second: the viewer asks
-  // every 200 ms while it waits, and on a policed uplink (cellular) keyframes
-  // that often are most of the traffic and get lost themselves.
-  void _keyframe() {
-    final now = _clock.elapsedMilliseconds;
-    if (now - _keyframeAt < 1000) return;
-    _keyframeAt = now;
-    capture.requestKeyframe();
-  }
-
-  // Sends what is due, and comes back in a couple of milliseconds while
-  // datagrams are still waiting.
+  // Sends what the pacing allows.
   void _pump() {
-    _pumpTimer?.cancel();
-    _pumpTimer = null;
+    final media = _media;
     final dev = _viewer;
-    if (dev == null || state != HostState.sharing) return;
-    if (!_pacer.pump(_clock.elapsedMilliseconds, (dg) => _send(dev, dg))) {
-      _keyframe(); // stale frames were dropped
-    }
-    if (!_pacer.idle) _pumpTimer = Timer(const Duration(milliseconds: 2), _pump);
-  }
-
-  Uint8List _packet(int seq, int index, int count, bool keyframe,
-      bool retransmit, int ts, Uint8List payload) {
-    final dg = Uint8List(16 + payload.length);
-    final bd = ByteData.sublistView(dg);
-    dg[0] = videoKind; // 1 = screen video, 3 = camera video
-    dg[1] = (keyframe ? 1 : 0) | (retransmit ? 2 : 0);
-    bd.setUint16(2, _session);
-    bd.setUint32(4, seq);
-    bd.setUint16(8, index);
-    bd.setUint16(10, count);
-    bd.setUint32(12, ts);
-    dg.setRange(16, 16 + payload.length, payload);
-    return dg;
-  }
-
-  int _sentSinceReport = 0; // datagrams, for the viewer's next report
-  bool _delivered = false; // the viewer has received something: the stream is up
-  bool _send(String dev, Uint8List dg) {
-    // Best effort; the viewer nacks anything the path dropped.
-    final ok = session.node?.sendDatagram(session.topicId, dev, dg) ?? false;
-    if (ok) _sentSinceReport++;
-    return ok;
-  }
-
-  void _remember(int seq, List<Uint8List> datagrams) {
-    _history[seq] = datagrams;
-    _historyOrder.add(seq);
-    // Keep roughly the last 500 ms, bounded to 16 frames (7.1).
-    while (_historyOrder.length > 16) {
-      _history.remove(_historyOrder.removeAt(0));
-    }
-  }
-
-  void _onNack(Map<String, Object?> msg) {
-    final dev = _viewer;
-    if (dev == null) return;
-    final frame = _intf(msg, 'frame');
-    final dgs = _history[frame];
-    if (dgs == null) return;
-    final indexes = msg['indexes'];
-    if (indexes is! List) return;
-    for (final idx in indexes) {
-      if (idx is num && idx.toInt() < dgs.length) {
-        final original = dgs[idx.toInt()];
-        // Re-send with the retransmission flag set.
-        final copy = Uint8List.fromList(original);
-        copy[1] = copy[1] | 2;
-        _send(dev, copy);
-      }
-    }
-  }
-
-  // Rate control (7.2, BitrateControl): loss and rising delay ease it down,
-  // clean reports raise it.
-  void _onReport(Map<String, Object?> msg) {
-    final received = _intf(msg, 'received');
-    var lost = _intf(msg, 'lost');
-    // Nothing at all arrived of what was sent: all of it is lost (the viewer
-    // cannot count frames it never saw a piece of).
-    // (Once something has arrived: before that the stream is still starting.)
-    if (received > 0) _delivered = true;
-    if (_delivered && received == 0 && lost == 0 && _sentSinceReport > 0) lost = _sentSinceReport;
-    _sentSinceReport = 0;
-    // UDP losing much of the stream for seconds (a mobile uplink policing
-    // it): send over TCP from now on, late rather than lost, at a lower
-    // bitrate.
-    final dev = _viewer;
-    if (!_overTcp && dev != null && _lossy.report(received: received, lost: lost)) {
-      final path = session.node?.datagramPath(session.topicId, dev) ?? 0;
-      if ((path == ucPathDirect || path == ucPathRelayed) &&
-          (session.node?.sendDatagramsOverTcp(session.topicId, dev) ?? false)) {
-        _overTcp = true;
-        _pacer.stuckMs = 1000;
-        debugPrint('[screen host] UDP loses too much: sending over TCP from now on');
-        // TCP reports no loss and a queue builds unseen on a mostly still
-        // screen: stay well under what such an uplink carries.
-        final cap = min(_rate.cap, tcpBitrateCap);
-        _rate = BitrateControl(bitrate: min(cap, 1000000), cap: cap);
-        capture.setBitrate(_bitrate);
-        _keyframe();
-        return;
-      }
-    }
-    // How far behind the viewer is: the newest frame it has against the
-    // newest sent, on this clock. Well behind (TCP queuing what the uplink
-    // cannot carry): drop what waits, start again from a keyframe, ease off.
-    final latest = msg['latestMs'] is num ? (msg['latestMs'] as num).toInt() : -1;
-    if (latest >= 0) _lagMs = max(0, ((_lastSentTs - latest) & 0xFFFFFFFF).toSigned(32));
+    if (media == null || dev == null || state != HostState.sharing) return;
     final now = _clock.elapsedMilliseconds;
-    if (_lagMs > behindMs && now - _behindAt > 1500) {
-      _behindAt = now;
-      _pacer.clear();
-      _awaitKey = true;
-      _keyframeAt = -1000; // this one must not wait for the limiter
-      _keyframe();
+    media.pump(now, (dg) => session.node?.sendDatagram(session.topicId, dev, dg) ?? false);
+    if (media.takeKeyframeWanted(now)) capture.requestKeyframe();
+  }
+
+  // The encoder follows the estimate (less the repair packets' share), and
+  // the sender learns whether the path is TCP (the channel fell back to it).
+  void _steer() {
+    final media = _media;
+    final dev = _viewer;
+    if (media == null || dev == null || state != HostState.sharing) return;
+    media.reliable = (session.node?.datagramPath(session.topicId, dev) ?? 0) == ucPathTcp;
+    final bps = media.encoderBps;
+    if ((bps - _encoderBps).abs() * 10 > _encoderBps) {
+      _encoderBps = bps;
+      capture.setBitrate(bps);
     }
-    final changed = _rate.report(
-        received: received,
-        lost: lost,
-        trendMs: msg['owdTrendMs'] is num ? (msg['owdTrendMs'] as num).toDouble() : 0.0,
-        lagMs: _lagMs.toDouble());
-    if (changed != null) capture.setBitrate(changed);
   }
 
   // How the sending side keeps up, for the viewer's statistics.
   void _sendStats() {
     final dev = _viewer;
-    if (dev == null || state != HostState.sharing) return;
+    final media = _media;
+    if (dev == null || media == null || state != HostState.sharing) return;
     final now = _clock.elapsedMilliseconds;
     final span = max(1, now - _statsAt);
-    // Over TCP (chosen, or the channel's own fallback) the transport only
-    // pushes back for a while: hold frames longer before dropping them.
-    final overTcp = _overTcp || (session.node?.datagramPath(session.topicId, dev) ?? 0) == ucPathTcp;
-    if (overTcp) _pacer.stuckMs = 1000;
     session.sendControl(dev, {
       't': '$prefix.stats',
       'session': _session,
       'fps': _statsUnits * 1000 / span,
-      'sentKbps': _statsBytes * 8 / span,
-      'targetKbps': _bitrate ~/ 1000,
+      'sentKbps': media.sendBps / 1000,
+      'encodedKbps': _statsBytes * 8 / span,
+      'targetKbps': media.targetBps / 1000,
+      'receiveKbps': media.receiveBps / 1000,
       'targetFps': _fps,
       'width': _width,
-      'senderDrops': _pacer.dropped,
-      'transport': overTcp ? 'tcp' : 'udp',
-      'lagMs': _lagMs,
+      'dropped': _statsSkipped * 1000 / span,
+      'senderDrops': _skipped + media.dropped,
+      'transport': media.reliable ? 'tcp' : 'udp',
+      'lagMs': media.lagMs,
+      'rttMs': media.rttMs,
+      'lossPct': media.lossRate * 100,
+      'fec': media.fecGroup,
+      'repeats': media.retransmitted,
+      'estimator': media.estimatorState,
       'pipeline': 'Android MediaCodec',
     });
     _statsAt = now;
-    _statsUnits = _statsBytes = 0;
+    _statsUnits = _statsBytes = _statsSkipped = 0;
   }
 
   /// Stops sharing (user pressed Stop, or the app is leaving the screen).
@@ -632,7 +502,9 @@ class ScreenHost {
     _statsTimer = null;
     _pumpTimer?.cancel();
     _pumpTimer = null;
-    _pacer.clear();
+    _controlTimer?.cancel();
+    _controlTimer = null;
+    _media = null;
     await _auSub?.cancel();
     _auSub = null;
     if (_controlOn) {
@@ -649,8 +521,6 @@ class ScreenHost {
     _viewer = null;
     _session = 0;
     _request = 0;
-    _history.clear();
-    _historyOrder.clear();
     _notify();
   }
 

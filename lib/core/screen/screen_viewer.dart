@@ -1,9 +1,10 @@
 // Viewer side of a screen-sharing session (docs/protocol.md section 7). The
 // phone asks a peer to share its screen; the peer encodes H.264 and sends it
-// as video datagrams, which this class reassembles into access units and hands
-// to a platform decoder. It returns the feedback the protocol expects
-// (scr.nack / scr.keyframe / scr.report) and forwards pointer and keyboard
-// events to the peer as in.* control messages, which the peer applies.
+// as media datagrams, which a MediaReceiver reassembles (repairing and asking
+// again for what was lost) into access units this class hands to a platform
+// decoder. It sends the receiver's feedback datagrams back every few tens of
+// milliseconds and forwards pointer and keyboard events to the peer as in.*
+// control messages, which the peer applies.
 //
 // This runs the same handshake for screens (scr.*) and cameras (cam.*); the
 // prefix and video datagram kind differ. It receives and decodes video and
@@ -15,7 +16,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import '../session.dart';
-import 'stream_control.dart';
+import 'media_packet.dart';
+import 'media_receiver.dart';
 
 /// One complete, in-order H.264 access unit for the decoder.
 class VideoAccessUnit {
@@ -41,28 +43,6 @@ class CursorImage {
 }
 
 enum ViewerState { idle, requesting, waiting, active, stopped, failed }
-
-class _Assembly {
-  _Assembly(this.sequence, this.count, this.keyframe, this.captureMs);
-  final int sequence;
-  final int count;
-  final bool keyframe;
-  final int captureMs;
-  final fragments = <int, Uint8List>{};
-  int bytes = 0;
-  bool nacked = false;
-  late DateTime deadline;
-
-  bool get complete => fragments.length == count;
-
-  Uint8List assemble() {
-    final out = BytesBuilder(copy: false);
-    for (var i = 0; i < count; i++) {
-      out.add(fragments[i]!);
-    }
-    return out.toBytes();
-  }
-}
 
 /// Pointer button bits, matching the protocol's left/right/middle = 1/2/4.
 class MouseButton {
@@ -151,28 +131,26 @@ class ScreenViewer {
   int get sessionToken => _session;
   bool get active => state == ViewerState.active;
 
-  // Reassembly state (7.1).
-  final _assemblies = <int, _Assembly>{};
-  int _nextDeliver = -1; // next sequence to deliver; -1 until a keyframe lands
-  bool _gated = true; // deltas gated until a complete keyframe
-  DateTime _lastKeyframeAsk = DateTime.fromMillisecondsSinceEpoch(0);
+  // The media session (7.1, 7.2): reassembly, repair, feedback.
+  MediaReceiver? _media;
   Timer? _tick;
+  final _clock = Stopwatch()..start();
 
-  // Report counters (7.2), reset each report.
-  int _received = 0;
-  int _lost = 0;
-  int _latestCaptureMs = -1; // of the newest complete frame: the host reads its lag from it
-  int _late = 0;
+  // Counters for the overlay, reset each second.
+  int _frames = 0;
+  int _packets = 0;
   int _decodeMs = 0;
   int _bytes = 0;
-  // Delay variation of complete frames (7.2, DelayMeter).
-  final _clock = Stopwatch()..start();
-  final _delay = DelayMeter();
+
+  /// The playout delay the decoder holds frames for, reported to the host.
+  int playoutMs = 0;
 
   /// What the last second looked like, for the statistics overlay: frames
-  /// completed and their bitrate, loss, jitter.
+  /// completed and their bitrate, loss, jitter, and what the repair packets
+  /// and repeats recovered.
   double unitsPerSecond = 0, kbps = 0, lossPct = 0;
-  double get jitterMs => _delay.jitterMs;
+  ReceiverStats lastSecond = ReceiverStats();
+  double get jitterMs => _media?.jitterMs ?? 0;
 
   /// The host's own statistics (its $prefix.stats), empty until it sends any.
   Map<String, Object?> hostStats = const {};
@@ -190,8 +168,12 @@ class ScreenViewer {
   int get _videoKind => prefix == 'cam' ? 3 : 1;
 
   /// Report the decode time of the last access unit (ms); folded into the
-  /// next scr.report so the sender can pace to the viewer.
+  /// next feedback so the sender can pace to the viewer.
   void reportDecodeMs(int ms) => _decodeMs = ms;
+
+  /// Drops what is being assembled and waits for a keyframe (the decoder
+  /// was restarted, or lost its way).
+  void restartFromKeyframe() => _media?.restartFromKeyframe();
 
   /// Asks the peer to share its screen. The peer may ask its user first, in
   /// which case state becomes [ViewerState.waiting].
@@ -254,11 +236,8 @@ class ScreenViewer {
     _reportTimer = null;
     _tick?.cancel();
     _tick = null;
-    _assemblies.clear();
-    _nextDeliver = -1;
-    _gated = true;
-    _received = _lost = _late = _decodeMs = _bytes = 0;
-    _delay.reset();
+    _media = null;
+    _frames = _packets = _decodeMs = _bytes = 0;
     if (_dev != null && _session != 0) {
       session.node?.closeDatagrams(session.topicId, _dev!);
     }
@@ -384,11 +363,12 @@ class ScreenViewer {
     cursorEmbedded = msg['cursorEmbedded'] == true;
     state = ViewerState.active;
     _lastUnitAt = DateTime.now();
+    _media = MediaReceiver(session: token, kind: _videoKind, fps: fps);
     // Open the media datagram channel with the fallback the relay mode allows.
     session.node?.openDatagrams(session.topicId, _dev!, session.mediaFallback);
     _reportTimer =
-        Timer.periodic(const Duration(seconds: 1), (_) => _sendReport());
-    _tick = Timer.periodic(const Duration(milliseconds: 15), (_) => _onTick());
+        Timer.periodic(const Duration(seconds: 1), (_) => _everySecond());
+    _tick = Timer.periodic(const Duration(milliseconds: 10), (_) => _onTick());
     _notify();
   }
 
@@ -412,148 +392,37 @@ class ScreenViewer {
 
   // --- video and cursor datagrams --------------------------------------------
 
-  static const int _headerLen = 16;
-
   void _onDatagram(String dev, Uint8List d) {
-    if (dev != _dev || state != ViewerState.active || d.isEmpty) return;
+    final media = _media;
+    if (media == null || dev != _dev || state != ViewerState.active || d.isEmpty) return;
     final kind = d[0];
     if (kind == 2) {
       _onCursorMove(d);
       return;
     }
-    if (kind != _videoKind || d.length <= _headerLen) return;
-    final bd = ByteData.sublistView(d);
-    final flags = d[1];
-    final token = bd.getUint16(2);
-    if (token != _session) return;
-    final seq = bd.getUint32(4);
-    final index = bd.getUint16(8);
-    final count = bd.getUint16(10);
-    final captureMs = bd.getUint32(12);
-    if (count == 0 || index >= count || count > 4096) return;
-    final payload = Uint8List.sublistView(d, _headerLen);
-    // Non-final fragments are exactly 1084 bytes; a frame is bounded to 4 MiB.
-    if (index != count - 1 && payload.length != 1084) return;
-    if (count * 1084 > 4 * 1024 * 1024) return;
-    final keyframe = (flags & 1) != 0;
-
-    if (_nextDeliver >= 0 && _before(seq, _nextDeliver)) {
-      _late++;
-      return;
-    }
-    if (_gated && !keyframe && !_assemblies.containsKey(seq)) return;
-
-    var a = _assemblies[seq];
-    if (a == null) {
-      if (_assemblies.length >= 8) _dropOldest();
-      a = _Assembly(seq, count, keyframe, captureMs)
-        ..deadline = DateTime.now()
-            .add(Duration(milliseconds: 2 * (1000 ~/ fps) + 60));
-      _assemblies[seq] = a;
-    }
-    if (a.count != count || a.keyframe != keyframe) return; // bad metadata
-    if (a.fragments.containsKey(index)) return; // duplicates do not count
-    a.fragments[index] = Uint8List.fromList(payload);
-    a.bytes += payload.length;
+    if (kind != _videoKind || packetType(d) == PacketType.feedback) return;
     _bytes += d.length;
-    if (a.complete) _delay.frame(a.captureMs, _clock.elapsedMilliseconds);
-
-    var buffered = 0;
-    for (final x in _assemblies.values) {
-      buffered += x.bytes;
+    _packets++;
+    final now = _clock.elapsedMilliseconds;
+    final frames = media.receive(d, now);
+    for (final f in frames) {
+      _frames++;
+      _units.add(VideoAccessUnit(f.number, f.keyframe, f.captureMs, f.bytes));
     }
-    if (buffered > 8 * 1024 * 1024) _dropOldest();
-    _deliverReady();
-  }
-
-  bool _before(int a, int b) =>
-      a != b && ((b - a) & 0xFFFFFFFF) < 0x80000000;
-
-  void _dropOldest() {
-    int? oldest;
-    for (final seq in _assemblies.keys) {
-      if (oldest == null || _before(seq, oldest)) oldest = seq;
-    }
-    if (oldest != null) {
-      _assemblies.remove(oldest);
-      _lost++;
-    }
-  }
-
-  void _deliverReady() {
-    while (true) {
-      _Assembly? next;
-      if (_nextDeliver >= 0 &&
-          _assemblies[_nextDeliver] != null &&
-          _assemblies[_nextDeliver]!.complete) {
-        next = _assemblies[_nextDeliver];
-      } else {
-        // Nothing to deliver next-in-order: a complete keyframe may leapfrog a
-        // lost reference, and the first delivery must be a keyframe.
-        for (final a in _assemblies.values) {
-          if (a.complete &&
-              a.keyframe &&
-              (_nextDeliver < 0 || !_before(a.sequence, _nextDeliver))) {
-            if (next == null || _before(a.sequence, next.sequence)) next = a;
-          }
-        }
-      }
-      if (next == null) return;
-      _assemblies.remove(next.sequence);
-      _assemblies.removeWhere((seq, _) {
-        if (_before(seq, next!.sequence)) {
-          _lost++;
-          return true;
-        }
-        return false;
-      });
-      _gated = false;
-      _nextDeliver = (next.sequence + 1) & 0xFFFFFFFF;
-      _received++;
-      _lastUnitAt = DateTime.now();
-      _latestCaptureMs = next.captureMs;
-      _units.add(VideoAccessUnit(
-          next.sequence, next.keyframe, next.captureMs, next.assemble()));
-    }
+    if (frames.isNotEmpty) _lastUnitAt = DateTime.now();
+    // Something arrived that a keyframe is now wanted for (a reference was
+    // lost): the word goes out at once rather than at the next interval.
+    if (media.feedbackDue(now)) _sendFeedback(media, now);
   }
 
   void _onTick() {
-    if (state != ViewerState.active) return;
-    final now = DateTime.now();
-    final interval = (1000 ~/ fps).clamp(1, 1000);
-    for (final a in _assemblies.values.toList()) {
-      if (a.complete || !now.isAfter(a.deadline)) continue;
-      if (!a.nacked && (!_gated || a.keyframe)) {
-        a.nacked = true;
-        final missing = <int>[
-          for (var i = 0; i < a.count; i++)
-            if (!a.fragments.containsKey(i)) i
-        ];
-        session.sendControl(_dev!, {
-          't': _t('nack'),
-          'session': _session,
-          'frame': a.sequence,
-          'indexes': missing,
-        });
-        a.deadline = now.add(Duration(milliseconds: interval.clamp(30, 1000)));
-      } else {
-        // A frame that still cannot complete is a lost reference: gate deltas
-        // and ask for a fresh keyframe.
-        _assemblies.remove(a.sequence);
-        _lost++;
-        _gated = true;
-        _askKeyframe();
-      }
-    }
-    // Gated with no keyframe in hand (e.g. the host's first keyframe was lost
-    // while the media channel was still opening): keep asking for one. This is
-    // rate limited to once per 200 ms inside _askKeyframe.
-    if (_gated && _assemblies.isEmpty &&
-        now.difference(_lastUnitAt) > const Duration(milliseconds: 300)) {
-      _askKeyframe();
-    }
+    final media = _media;
+    if (media == null || state != ViewerState.active) return;
+    final now = _clock.elapsedMilliseconds;
+    media.expire(now);
+    if (media.feedbackDue(now)) _sendFeedback(media, now);
     // No decoded picture for 8 s after start: tell the user (7.3).
-    if (now.difference(_lastUnitAt) > const Duration(seconds: 8) &&
+    if (DateTime.now().difference(_lastUnitAt) > const Duration(seconds: 8) &&
         error.isEmpty &&
         statusDetail.isEmpty) {
       statusDetail = 'Waiting for the screen…';
@@ -561,34 +430,25 @@ class ScreenViewer {
     }
   }
 
-  void _askKeyframe() {
-    final now = DateTime.now();
-    if (now.difference(_lastKeyframeAsk) < const Duration(milliseconds: 200)) {
-      return; // rate limited to once per 200 ms (7.1)
-    }
-    _lastKeyframeAsk = now;
-    session.sendControl(
-        _dev!, {'t': _t('keyframe'), 'session': _session});
+  // Feedback goes back on the media channel (7.2): what arrived and when,
+  // what to send again, whether a keyframe is wanted.
+  void _sendFeedback(MediaReceiver media, int now) {
+    final dev = _dev;
+    if (dev == null) return;
+    session.node?.sendDatagram(
+        session.topicId, dev, media.takeFeedback(now, playoutMs, _decodeMs.toDouble()));
   }
 
-  void _sendReport() {
-    if (state != ViewerState.active) return;
-    session.sendControl(_dev!, {
-      't': _t('report'),
-      'session': _session,
-      'received': _received,
-      'lost': _lost,
-      'late': _late,
-      if (_latestCaptureMs >= 0) 'latestMs': _latestCaptureMs,
-      'jitterMs': _delay.jitterMs,
-      'owdTrendMs': _delay.trendMs,
-      'decodeMs': _decodeMs,
-    });
-    // One report a second: the overlay's figures.
-    unitsPerSecond = _received.toDouble();
+  // Once a second: the overlay's figures.
+  void _everySecond() {
+    final media = _media;
+    if (media == null || state != ViewerState.active) return;
+    lastSecond = media.report();
+    unitsPerSecond = _frames.toDouble();
     kbps = _bytes * 8 / 1000;
-    lossPct = _received + _lost == 0 ? 0 : _lost * 100 / (_received + _lost);
-    _received = _lost = _late = _bytes = 0;
+    final lost = lastSecond.lost;
+    lossPct = _packets + lost == 0 ? 0 : lost * 100 / (_packets + lost);
+    _frames = _packets = _bytes = 0;
     _notify();
   }
 
