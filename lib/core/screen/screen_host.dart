@@ -14,6 +14,7 @@ import '../session.dart';
 import '../../uconnect/uconnect.dart' show ucPathDirect;
 import 'remote_input.dart';
 import 'screen_capture.dart';
+import 'stream_control.dart';
 
 enum HostState { idle, sharing }
 
@@ -48,10 +49,11 @@ class ScreenHost {
   final String viewPerm;
   final String? directPerm;
 
-  /// Source-side caps on what to encode (0 = no cap): the camera settings bound
-  /// a viewer's request down to these.
+  /// Source-side caps on what to encode (0 = no cap): the screen-sharing and
+  /// camera settings bound a viewer's request down to these.
   int maxWidthCap = 0;
   int maxFpsCap = 0;
+  int maxBitrateCap = 0;
 
   bool get _supportsControl => prefix == 'scr';
   // The source (camera) currently being captured, index into capture.sources().
@@ -74,7 +76,14 @@ class ScreenHost {
   int _width = 0;
   int _height = 0;
   int _fps = 30;
-  int _bitrate = 4000000;
+  // This session's bitrate, within its cap: the settings', or the viewer's if lower.
+  BitrateControl _rate = BitrateControl(bitrate: 8000000, cap: 16000000);
+  int get _bitrate => _rate.bitrate;
+
+  // Per-second statistics for the viewer ($prefix.stats).
+  final _clock = Stopwatch()..start();
+  Timer? _statsTimer;
+  int _statsAt = 0, _statsUnits = 0, _statsBytes = 0;
 
   StreamSubscription<CaptureUnit>? _auSub;
   final _changed = StreamController<void>.broadcast();
@@ -206,15 +215,19 @@ class ScreenHost {
 
     // Honour the viewer's requested quality, bounded by the source's own caps.
     var maxWidth = _intf(msg, 'maxWidth');
-    if (maxWidth <= 0) maxWidth = 1280;
+    if (maxWidth <= 0) maxWidth = 1920;
     if (maxWidthCap > 0) maxWidth = min(maxWidth, maxWidthCap);
     var maxFps = _intf(msg, 'maxFps');
-    if (maxFps <= 0) maxFps = 30;
+    if (maxFps <= 0) maxFps = 60;
     if (maxFpsCap > 0) maxFps = min(maxFps, maxFpsCap);
-    _fps = maxFps.clamp(1, 60);
-    // Direct links get more; relay/TCP start lower (7.2).
+    _fps = maxFps.clamp(1, 120);
+    // The viewer may ask for less than this device allows, never more.
+    final asked = _intf(msg, 'maxBitrate');
+    final allowed = maxBitrateCap > 0 ? maxBitrateCap : 16000000;
+    final cap = asked > 0 ? min(allowed, max(asked, BitrateControl.minBitrate)) : allowed;
+    // Direct links start higher; relay/TCP lower (7.2).
     final path = session.node?.datagramPath(session.topicId, dev) ?? 0;
-    _bitrate = path == ucPathDirect ? 4000000 : 1500000;
+    _rate = BitrateControl(bitrate: min(cap, path == ucPathDirect ? 8000000 : 3000000), cap: cap);
 
     // The sources on offer (cameras); the viewer gets this list and may switch.
     final sources = await capture.sources();
@@ -279,6 +292,10 @@ class ScreenHost {
     }
 
     _auSub = capture.accessUnits().listen(_onAccessUnit);
+    _statsAt = _clock.elapsedMilliseconds;
+    _statsUnits = _statsBytes = 0;
+    _statsTimer?.cancel();
+    _statsTimer = Timer.periodic(const Duration(seconds: 1), (_) => _sendStats());
     // The encoder's very first keyframe can be dropped while the media channel
     // is still opening; force fresh ones over the first second so the viewer
     // gets a complete reference promptly.
@@ -378,6 +395,8 @@ class ScreenHost {
     if (dev == null || state != HostState.sharing) return;
     final seq = _seq & 0xFFFFFFFF;
     _seq++;
+    _statsUnits++;
+    _statsBytes += u.bytes.length;
     final count = (u.bytes.length + _payloadMax - 1) ~/ _payloadMax;
     if (count == 0 || count > 0xFFFF) return;
     final ts = (u.ptsUs ~/ 1000) & 0xFFFFFFFF;
@@ -441,37 +460,34 @@ class ScreenHost {
     }
   }
 
-  // Minimal rate control (7.2): ease the bitrate down on sustained loss and
-  // back up when clean, within [300 kbit, start].
-  int _cleanReports = 0;
+  // Rate control (7.2, BitrateControl): loss and rising delay ease it down,
+  // clean reports raise it.
   void _onReport(Map<String, Object?> msg) {
-    final received = _intf(msg, 'received');
-    final lost = _intf(msg, 'lost');
-    final total = received + lost;
-    if (total == 0) return;
-    final lossPct = lost * 100 / total;
-    if (lossPct > 5) {
-      _cleanReports = 0;
-      final next = max(300000, (_bitrate * 0.8).round());
-      if (next != _bitrate) {
-        _bitrate = next;
-        capture.setBitrate(_bitrate);
-      }
-    } else {
-      _cleanReports++;
-      if (_cleanReports >= 3) {
-        _cleanReports = 0;
-        final cap = session.node?.datagramPath(session.topicId, _viewer ?? '') ==
-                ucPathDirect
-            ? 6000000
-            : 2500000;
-        final next = min(cap, (_bitrate * 1.05).round() + 50000);
-        if (next != _bitrate) {
-          _bitrate = next;
-          capture.setBitrate(_bitrate);
-        }
-      }
-    }
+    final changed = _rate.report(
+        received: _intf(msg, 'received'),
+        lost: _intf(msg, 'lost'),
+        trendMs: msg['owdTrendMs'] is num ? (msg['owdTrendMs'] as num).toDouble() : 0.0);
+    if (changed != null) capture.setBitrate(changed);
+  }
+
+  // How the sending side keeps up, for the viewer's statistics.
+  void _sendStats() {
+    final dev = _viewer;
+    if (dev == null || state != HostState.sharing) return;
+    final now = _clock.elapsedMilliseconds;
+    final span = max(1, now - _statsAt);
+    session.sendControl(dev, {
+      't': '$prefix.stats',
+      'session': _session,
+      'fps': _statsUnits * 1000 / span,
+      'sentKbps': _statsBytes * 8 / span,
+      'targetKbps': _bitrate ~/ 1000,
+      'targetFps': _fps,
+      'width': _width,
+      'pipeline': 'Android MediaCodec',
+    });
+    _statsAt = now;
+    _statsUnits = _statsBytes = 0;
   }
 
   /// Stops sharing (user pressed Stop, or the app is leaving the screen).
@@ -493,6 +509,8 @@ class ScreenHost {
   }
 
   Future<void> _teardownAsync() async {
+    _statsTimer?.cancel();
+    _statsTimer = null;
     await _auSub?.cancel();
     _auSub = null;
     if (_controlOn) {

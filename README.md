@@ -47,13 +47,16 @@
   share the phone's own screen and camera, each behind a consent prompt
   unless that device's rules allow it without asking. A computer can control
   the phone (taps, swipes, typing) through the accessibility service you
-  enable.
+  enable. You choose the resolution, frame rate (up to 120 fps, 60 by
+  default) and bitrate you receive; pictures play back at the pace they were
+  captured after a short buffer, and a statistics overlay shows how both
+  devices keep up. Sharing has its own limits in Settings.
 - **Stays connected.** A foreground service keeps the session alive in the
   background, and ends it cleanly when the app closes.
 - **Searchable settings.** The search field at the top of Settings finds
   single settings, says where each is, and opens its page pointing at it.
-  How the phone watches other devices (the viewing quality) has its own
-  page, Use other devices › Watching.
+  How the phone watches other devices (the quality to ask for and the
+  playback buffer) has its own page, Use other devices › Watching.
 - **Color schemes.** Follow system, Dark, Darker, Light or Colorful.
 
 ### Screenshots

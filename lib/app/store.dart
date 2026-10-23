@@ -89,17 +89,25 @@ class AppStore {
   bool offerCamera = false;
   int relayMode = RelayMode.auto;
   bool get forceRelay => relayMode == RelayMode.always;
-  // Quality to ask for when watching another device's screen. The default is
-  // full; the viewer lets the user pick a lower one when the phone's decoder
-  // cannot keep up (see ScreenQuality in ui/screen_view.dart).
+  // What to ask for when watching another device's screen or camera (Settings
+  // > Watching; a view's quality sheet changes them): width, frame rate, a
+  // bitrate cap (0 = the other device's limit) and the playback buffer.
   int screenMaxWidth = 1920;
   int screenMaxFps = 60;
+  int viewBitrate = 0;
+  int viewBufferMs = 100;
+  // Limits on sharing this phone's screen (Settings > Screen sharing): width
+  // (0 = the screen's own), frame rate and bitrate.
+  int screenShareMaxWidth = 0;
+  int screenShareMaxFps = 60;
+  int screenShareMaxBitrate = 16000000;
   // Camera source settings: which of this device's cameras to offer (empty =
   // all), and the top resolution/frame rate to encode at (bounded further by
   // what the physical camera supports). A viewer picks within these.
   Set<String> cameraOffered = {};
   int cameraMaxWidth = 1280;
   int cameraMaxFps = 30;
+  int cameraMaxBitrate = 16000000;
   Set<String> defaultPermissions = {};
   final special = <String, SpecialRules>{}; // key hex -> its special rules
   // Network rules, per topic id (hex): first match wins (core/network_rules).
@@ -148,6 +156,15 @@ class AppStore {
         decoded['screenMaxWidth'] is int ? decoded['screenMaxWidth'] as int : 1920;
     screenMaxFps =
         decoded['screenMaxFps'] is int ? decoded['screenMaxFps'] as int : 60;
+    final values = decoded;  // keeps its checked type inside the closure
+    int number(String key, int fallback) =>
+        values[key] is int ? values[key] as int : fallback;
+    viewBitrate = number('viewBitrate', 0);
+    viewBufferMs = number('viewBufferMs', 100);
+    screenShareMaxWidth = number('screenShareMaxWidth', 0);
+    screenShareMaxFps = number('screenShareMaxFps', 60);
+    screenShareMaxBitrate = number('screenShareMaxBitrate', 16000000);
+    cameraMaxBitrate = number('cameraMaxBitrate', 16000000);
     colorScheme = decoded['colorScheme'] is String
         ? decoded['colorScheme'] as String
         : 'dark';
@@ -205,6 +222,12 @@ class AppStore {
       'relayMode': relayMode,
       'screenMaxWidth': screenMaxWidth,
       'screenMaxFps': screenMaxFps,
+      'viewBitrate': viewBitrate,
+      'viewBufferMs': viewBufferMs,
+      'screenShareMaxWidth': screenShareMaxWidth,
+      'screenShareMaxFps': screenShareMaxFps,
+      'screenShareMaxBitrate': screenShareMaxBitrate,
+      'cameraMaxBitrate': cameraMaxBitrate,
       'colorScheme': colorScheme,
       'defaults': defaultPermissions.toList()..sort(),
       'special': [for (final t in special.values) t.toJson()],

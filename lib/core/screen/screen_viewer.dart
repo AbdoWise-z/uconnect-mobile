@@ -15,6 +15,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import '../session.dart';
+import 'stream_control.dart';
 
 /// One complete, in-order H.264 access unit for the decoder.
 class VideoAccessUnit {
@@ -162,6 +163,18 @@ class ScreenViewer {
   int _lost = 0;
   int _late = 0;
   int _decodeMs = 0;
+  int _bytes = 0;
+  // Delay variation of complete frames (7.2, DelayMeter).
+  final _clock = Stopwatch()..start();
+  final _delay = DelayMeter();
+
+  /// What the last second looked like, for the statistics overlay: frames
+  /// completed and their bitrate, loss, jitter.
+  double unitsPerSecond = 0, kbps = 0, lossPct = 0;
+  double get jitterMs => _delay.jitterMs;
+
+  /// The host's own statistics (its $prefix.stats), empty until it sends any.
+  Map<String, Object?> hostStats = const {};
   Timer? _reportTimer;
   DateTime _lastUnitAt = DateTime.fromMillisecondsSinceEpoch(0);
 
@@ -187,7 +200,10 @@ class ScreenViewer {
   /// user picked; a lower one keeps playback smooth when the phone's decoder
   /// cannot keep up with a full-resolution desktop during motion.
   void request(String devId,
-      {bool wantControl = false, int maxWidth = 1920, int maxFps = 60}) {
+      {bool wantControl = false,
+      int maxWidth = 1920,
+      int maxFps = 60,
+      int maxBitrate = 0}) {
     stop();
     _dev = devId;
     _request = _nextRequestId++;
@@ -200,8 +216,10 @@ class ScreenViewer {
       'wantControl': wantControl,
       'maxWidth': maxWidth,
       'maxFps': maxFps,
+      if (maxBitrate > 0) 'maxBitrate': maxBitrate,
       'codecs': ['h264'],
     });
+    hostStats = const {};
     // A pending request expires in 35 s (7.3).
     Timer(const Duration(seconds: 35), () {
       if (_session == 0 &&
@@ -238,7 +256,8 @@ class ScreenViewer {
     _assemblies.clear();
     _nextDeliver = -1;
     _gated = true;
-    _received = _lost = _late = _decodeMs = 0;
+    _received = _lost = _late = _decodeMs = _bytes = 0;
+    _delay.reset();
     if (_dev != null && _session != 0) {
       session.node?.closeDatagrams(session.topicId, _dev!);
     }
@@ -302,6 +321,11 @@ class ScreenViewer {
         }
       case 'cursor':
         _onCursorImage(msg);
+      case 'stats':
+        if (_is(msg, 'session', _session)) {
+          hostStats = Map<String, Object?>.from(msg);
+          _notify();
+        }
       case 'status':
         if (_is(msg, 'session', _session)) {
           statusDetail = msg['detail'] is String ? msg['detail'] as String : '';
@@ -430,6 +454,8 @@ class ScreenViewer {
     if (a.fragments.containsKey(index)) return; // duplicates do not count
     a.fragments[index] = Uint8List.fromList(payload);
     a.bytes += payload.length;
+    _bytes += d.length;
+    if (a.complete) _delay.frame(a.captureMs, _clock.elapsedMilliseconds);
 
     var buffered = 0;
     for (final x in _assemblies.values) {
@@ -551,11 +577,16 @@ class ScreenViewer {
       'received': _received,
       'lost': _lost,
       'late': _late,
-      'jitterMs': 0,
-      'owdTrendMs': 0,
+      'jitterMs': _delay.jitterMs,
+      'owdTrendMs': _delay.trendMs,
       'decodeMs': _decodeMs,
     });
-    _received = _lost = _late = 0;
+    // One report a second: the overlay's figures.
+    unitsPerSecond = _received.toDouble();
+    kbps = _bytes * 8 / 1000;
+    lossPct = _received + _lost == 0 ? 0 : _lost * 100 / (_received + _lost);
+    _received = _lost = _late = _bytes = 0;
+    _notify();
   }
 
   void _onCursorMove(Uint8List d) {

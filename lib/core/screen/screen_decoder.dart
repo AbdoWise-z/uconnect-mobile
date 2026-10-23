@@ -21,6 +21,7 @@ class ScreenDecoder {
   Stream<String> get errors => _errors.stream;
 
   StreamSubscription<VideoAccessUnit>? _sub;
+  int _starts = 0; // the latest start() call; an overtaken one does not subscribe
   bool _disposed = false;
 
   bool get supported => Platform.isAndroid;
@@ -40,16 +41,21 @@ class ScreenDecoder {
     });
   }
 
-  /// Creates the texture and starts decoding [viewer]'s access units into it.
-  /// Safe to call again (e.g. after a quality change): the previous unit
-  /// subscription is cancelled first so units are never fed to the freshly
-  /// created decoder twice, which would corrupt it and ghost the picture.
-  Future<int?> start(ScreenViewer viewer) async {
+  /// Creates the texture and starts decoding [viewer]'s access units into it,
+  /// each shown at its capture pace [bufferMs] after the quickest ones arrive
+  /// (0: as soon as it is decoded). Safe to call again (e.g. after a quality
+  /// change): the previous unit subscription is cancelled first, and of calls
+  /// that overlap only the last subscribes, so units are never fed to the
+  /// decoder twice, which would corrupt it and smear the picture.
+  Future<int?> start(ScreenViewer viewer, {int bufferMs = 0}) async {
     if (!supported) return null;
-    await _sub?.cancel();
+    final start = ++_starts;
+    final previous = _sub;
     _sub = null;
-    final created =
-        await _channel.invokeMapMethod<String, Object?>('create');
+    await previous?.cancel();
+    final created = await _channel
+        .invokeMapMethod<String, Object?>('create', {'bufferMs': bufferMs});
+    if (start != _starts || _disposed) return null;
     textureId = created?['textureId'] as int?;
     _sub = viewer.units.listen((u) async {
       if (_disposed) return;
@@ -66,6 +72,16 @@ class ScreenDecoder {
       viewer.reportDecodeMs(DateTime.now().difference(started).inMilliseconds);
     });
     return textureId;
+  }
+
+  /// Pictures rendered, and rendered after their time, since the last call.
+  Future<Map<String, Object?>> stats() async {
+    if (!supported || _disposed) return const {};
+    try {
+      return await _channel.invokeMapMethod<String, Object?>('stats') ?? const {};
+    } on PlatformException {
+      return const {};
+    }
   }
 
   Future<void> dispose() async {

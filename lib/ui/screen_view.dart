@@ -30,36 +30,27 @@ class _Hid {
   static const up = 0x52;
 }
 
-/// A resolution/frame-rate the viewer can ask the host to encode at. The host
-/// scales and paces down to this, so a lower one keeps playback smooth when the
-/// phone's decoder cannot keep up with a full desktop. The user picks one from
-/// the screen view; the choice is remembered (AppStore.screenMaxWidth/Fps).
-class ScreenQuality {
-  const ScreenQuality(this.label, this.maxWidth, this.maxFps);
-  final String label;
-  final int maxWidth;
-  final int maxFps;
+/// What a viewer can ask the other device for: a resolution, a frame rate
+/// and a bitrate (it scales and paces down to them, and caps each by its own
+/// limits), and how long a playback buffer to keep. The phone remembers the
+/// choice (AppStore.screenMaxWidth/Fps, viewBitrate, viewBufferMs).
+class ViewQuality {
+  static const widths = <int>[3840, 2560, 1920, 1280, 854];
+  static const frameRates = <int>[15, 24, 30, 60, 90, 120];
+  static const bitrates = <int>[0, 2000000, 4000000, 8000000, 16000000, 32000000, 50000000];
+  static const buffers = <int>[0, 50, 100, 150, 250, 500];
 
-  static const presets = <ScreenQuality>[
-    ScreenQuality('Full', 1920, 60),
-    ScreenQuality('High', 1600, 30),
-    ScreenQuality('Medium', 1280, 30),
-    ScreenQuality('Low', 960, 30),
-  ];
-
-  bool matches(int width, int fps) => width == maxWidth && fps == maxFps;
-
-  /// The preset for a stored choice, falling back to the closest by width.
-  static ScreenQuality forStore(int width, int fps) {
-    for (final q in presets) {
-      if (q.matches(width, fps)) return q;
-    }
-    var best = presets.first;
-    for (final q in presets) {
-      if ((q.maxWidth - width).abs() < (best.maxWidth - width).abs()) best = q;
-    }
-    return best;
-  }
+  static String widthLabel(int width) => switch (width) {
+        3840 => 'Original',
+        2560 => '1440p',
+        1920 => '1080p',
+        1280 => '720p',
+        854 => '480p',
+        _ => '$width px',
+      };
+  static String bitrateLabel(int bitrate) =>
+      bitrate <= 0 ? 'Automatic' : '${bitrate ~/ 1000000} Mbit/s';
+  static String bufferLabel(int ms) => ms <= 0 ? 'None' : '$ms ms';
 }
 
 class ScreenView extends StatefulWidget {
@@ -92,6 +83,10 @@ class _ScreenViewState extends State<ScreenView> {
   late final ScreenViewer _viewer;
   late final ScreenDecoder _decoder;
   int? _textureId;
+  // A decoder start is under way; _decoderWanted counts the restarts asked
+  // for (a quality change, a retry), so one asked for meanwhile is not lost.
+  bool _startingDecoder = false;
+  int _decoderWanted = 0;
   final _focusNode = FocusNode();
   final _keyboard = TextEditingController();
   final _transform = TransformationController();
@@ -100,13 +95,14 @@ class _ScreenViewState extends State<ScreenView> {
   bool _keyboardOn = false;
   bool _fullscreen = false;
   String _typed = '';
-  late ScreenQuality _quality;
+  // The statistics overlay, and the decoder's figures for it (polled).
+  bool _showStats = false;
+  Timer? _statsTimer;
+  Map<String, Object?> _render = const {};
 
   @override
   void initState() {
     super.initState();
-    _quality = ScreenQuality.forStore(
-        widget.state.store.screenMaxWidth, widget.state.store.screenMaxFps);
     // Let the view rotate freely while open.
     SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.portraitUp,
@@ -118,9 +114,12 @@ class _ScreenViewState extends State<ScreenView> {
     _decoder = ScreenDecoder();
     _viewer.changed.listen((_) async {
       if (!mounted) return;
-      if (_viewer.active && _textureId == null && _decoder.supported) {
-        final id = await _decoder.start(_viewer);
-        if (mounted) setState(() => _textureId = id);
+      if (_viewer.active && _textureId == null && !_startingDecoder && _decoder.supported) {
+        _startingDecoder = true;
+        final wanted = _decoderWanted;
+        final id = await _decoder.start(_viewer, bufferMs: widget.state.store.viewBufferMs);
+        _startingDecoder = false;
+        if (mounted && id != null && wanted == _decoderWanted) setState(() => _textureId = id);
       }
       // Auto-take control when opened as a control session.
       if (widget.startControl &&
@@ -134,34 +133,48 @@ class _ScreenViewState extends State<ScreenView> {
     _decoder.sizeChanged.listen((_) {
       if (mounted) setState(() {});
     });
+    _statsTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
+      if (!_showStats || !mounted) return;
+      final render = await _decoder.stats();
+      if (mounted) setState(() => _render = render);
+    });
     _startView();
   }
 
   // Requests the stream at the quality the user has selected. Used on open and
   // on "Try again" so a retry keeps the chosen quality instead of reverting.
-  void _startView() {
+  void _startView({bool? wantControl}) {
+    final store = widget.state.store;
     _viewer.request(widget.devId,
-        wantControl: widget.startControl,
-        maxWidth: _quality.maxWidth,
-        maxFps: _quality.maxFps);
+        wantControl: wantControl ?? widget.startControl,
+        maxWidth: store.screenMaxWidth,
+        maxFps: store.screenMaxFps,
+        maxBitrate: store.viewBitrate);
   }
 
-  // Re-requests the stream at a different resolution/frame rate. The host
-  // re-encodes at the new size, so rebuild the decoder for a clean start and
-  // keep control if we had it.
-  void _changeQuality(ScreenQuality q) {
-    if (q.matches(_quality.maxWidth, _quality.maxFps)) return;
+  // Re-requests the stream with a changed quality (remembered for next time).
+  // The host re-encodes, so rebuild the decoder for a clean start, and keep
+  // control if we had it.
+  Future<void> _ask({int? width, int? fps, int? bitrate, int? bufferMs}) async {
+    final store = widget.state.store;
+    if ((width ?? store.screenMaxWidth) == store.screenMaxWidth &&
+        (fps ?? store.screenMaxFps) == store.screenMaxFps &&
+        (bitrate ?? store.viewBitrate) == store.viewBitrate &&
+        (bufferMs ?? store.viewBufferMs) == store.viewBufferMs) {
+      return;
+    }
     final wasControlling = _canControl && _viewer.controlOn;
+    await widget.state.saveSettings(
+        screenMaxWidth: width,
+        screenMaxFps: fps,
+        viewBitrate: bitrate,
+        viewBufferMs: bufferMs);
+    if (!mounted) return;
     setState(() {
-      _quality = q;
       _textureId = null;
+      _decoderWanted++;
     });
-    widget.state
-        .saveSettings(screenMaxWidth: q.maxWidth, screenMaxFps: q.maxFps);
-    _viewer.request(widget.devId,
-        wantControl: wasControlling || widget.startControl,
-        maxWidth: q.maxWidth,
-        maxFps: q.maxFps);
+    _startView(wantControl: wasControlling || widget.startControl);
   }
 
   @override
@@ -173,6 +186,7 @@ class _ScreenViewState extends State<ScreenView> {
     ]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _viewer.releaseInput();
+    _statsTimer?.cancel();
     _viewer.dispose();
     _decoder.dispose();
     _focusNode.dispose();
@@ -305,32 +319,117 @@ class _ScreenViewState extends State<ScreenView> {
     );
   }
 
-  // Lets the user pick the stream quality. A lower one keeps motion smooth when
-  // the decoder cannot keep up; the pick is remembered across sessions.
+  // Opens the quality sheet: what to ask the host for, the playback buffer,
+  // and the statistics overlay.
   Widget _qualityMenu({Color? color}) {
-    return PopupMenuButton<ScreenQuality>(
-      tooltip: 'Quality (${_quality.label})',
+    return IconButton(
+      tooltip: 'Quality',
       icon: Icon(Icons.high_quality_outlined, color: color),
-      onSelected: _changeQuality,
-      itemBuilder: (_) => [
-        for (final q in ScreenQuality.presets)
-          PopupMenuItem<ScreenQuality>(
-            value: q,
-            child: Row(
-              children: [
-                Icon(
-                  q.matches(_quality.maxWidth, _quality.maxFps)
-                      ? Icons.check
-                      : null,
-                  size: 18,
-                  color: UcColors.accent,
+      onPressed: _openQualitySheet,
+    );
+  }
+
+  void _openQualitySheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: UcColors.panel,
+      showDragHandle: true,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setSheet) {
+          final store = widget.state.store;
+          Widget row<T>(String title, List<T> values, T current, String Function(T) label,
+                  void Function(T) pick) =>
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title.toUpperCase(),
+                        style: TextStyle(
+                            fontSize: 11.5,
+                            letterSpacing: 0.8,
+                            fontWeight: FontWeight.w600,
+                            color: UcColors.textSecondary)),
+                    const SizedBox(height: 6),
+                    Wrap(spacing: 8, runSpacing: 6, children: [
+                      for (final v in values)
+                        ChoiceChip(
+                          label: Text(label(v)),
+                          selected: v == current,
+                          onSelected: (_) async {
+                            pick(v);
+                            setSheet(() {});
+                          },
+                        ),
+                    ]),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                Text('${q.label}  ·  ${q.maxWidth}×${q.maxFps}fps'),
-              ],
+              );
+          return SafeArea(
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  row<int>('Resolution', ViewQuality.widths, store.screenMaxWidth,
+                      ViewQuality.widthLabel, (v) => _ask(width: v)),
+                  row<int>('Frame rate', ViewQuality.frameRates, store.screenMaxFps,
+                      (v) => '$v fps', (v) => _ask(fps: v)),
+                  row<int>('Bitrate', ViewQuality.bitrates, store.viewBitrate,
+                      ViewQuality.bitrateLabel, (v) => _ask(bitrate: v)),
+                  row<int>('Playback buffer', ViewQuality.buffers, store.viewBufferMs,
+                      ViewQuality.bufferLabel, (v) => _ask(bufferMs: v)),
+                  SwitchListTile(
+                    title: const Text('Statistics'),
+                    subtitle: const Text('How the stream keeps up, on both devices'),
+                    value: _showStats,
+                    onChanged: (on) {
+                      setState(() => _showStats = on);
+                      setSheet(() {});
+                    },
+                  ),
+                ],
+              ),
             ),
-          ),
-      ],
+          );
+        },
+      ),
+    );
+  }
+
+  // Everything about how the stream keeps up: what this phone receives and
+  // shows, its playback buffer, and how the host is doing.
+  Widget _statsOverlay() {
+    String n(Object? v, [int digits = 0]) =>
+        v is num ? v.toStringAsFixed(digits) : '–';
+    final store = widget.state.store;
+    final host = _viewer.hostStats;
+    final lines = <String>[
+      'Asked ${ViewQuality.widthLabel(store.screenMaxWidth)}, ${store.screenMaxFps} fps, '
+          '${ViewQuality.bitrateLabel(store.viewBitrate)}',
+      'Received ${n(_viewer.unitsPerSecond)} fps · ${n(_viewer.kbps / 1000, 1)} Mbit/s · '
+          'loss ${n(_viewer.lossPct, 1)}% · jitter ${n(_viewer.jitterMs, 1)} ms',
+      'Shown ${n(_render['rendered'])} fps · late ${n(_render['late'])} · '
+          'buffer ${ViewQuality.bufferLabel(store.viewBufferMs)}',
+      if (host.isNotEmpty)
+        'Host: ${n(host['fps'])} fps'
+            '${host['encodeMs'] is num ? ', encode ${n(host['encodeMs'], 1)} ms' : ''}'
+            '${host['queue'] is num ? ' · queue ${n(host['queue'], 1)}' : ''}'
+            '${host['dropped'] is num ? ' · dropped ${n(host['dropped'], 1)}/s' : ''}',
+      if (host.isNotEmpty)
+        'Host target: ${n(host['targetFps'])} fps, ${n((host['targetKbps'] as num? ?? 0) / 1000, 1)} Mbit/s, '
+            '${n(host['width'])} px · ${host['pipeline'] ?? ''}',
+    ];
+    return IgnorePointer(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.72),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(lines.join('\n'),
+            style: const TextStyle(
+                color: Colors.white, fontSize: 11, fontFamily: 'monospace', height: 1.35)),
+      ),
     );
   }
 
@@ -408,7 +507,10 @@ class _ScreenViewState extends State<ScreenView> {
               const SizedBox(height: 16),
               FilledButton(
                 onPressed: () {
-                  setState(() => _textureId = null);
+                  setState(() {
+                    _textureId = null;
+                    _decoderWanted++;
+                  });
                   _startView();
                 },
                 child: const Text('Try again'),
@@ -479,6 +581,7 @@ class _ScreenViewState extends State<ScreenView> {
           ),
         if (_viewer.active && _canControl && !_viewer.controlOn && !_fullscreen)
           Positioned(left: 12, right: 12, bottom: 12, child: _hintBar()),
+        if (_showStats) Positioned(left: 8, top: 8, child: _statsOverlay()),
       ],
     );
   }

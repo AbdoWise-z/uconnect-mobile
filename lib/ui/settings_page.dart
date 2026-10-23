@@ -20,7 +20,7 @@ import '../core/session.dart';
 import 'prompt_dialog.dart';
 import 'network_rules_page.dart';
 import 'scheme_picker.dart';
-import 'screen_view.dart' show ScreenQuality;
+import 'screen_view.dart' show ViewQuality;
 import 'settings_widgets.dart';
 import 'sync_folders_page.dart';
 import 'theme.dart';
@@ -243,7 +243,9 @@ class _SettingsPageState extends State<SettingsPage> {
             icon: Icons.visibility_outlined,
             iconColor: const Color(0xFF6A8CDE),
             title: 'Watching',
-            subtitle: 'Quality: ${_viewQuality.label}',
+            subtitle: '${ViewQuality.widthLabel(state.store.screenMaxWidth)} · '
+                '${state.store.screenMaxFps} fps · '
+                '${ViewQuality.bitrateLabel(state.store.viewBitrate)}',
             onTap: () => _open('Watching', _watchingPage),
           ),
         ]),
@@ -602,6 +604,35 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ],
         ),
+        SettingsSection(
+          title: 'Limits',
+          footer: 'The most a viewer can ask for; it may ask for less. The '
+              'bitrate also adapts to the connection.',
+          children: [
+            SettingsTile(
+              icon: Icons.aspect_ratio,
+              title: 'Resolution',
+              trailing: _dropdown<int>(state.store.screenShareMaxWidth, const [0, 1920, 1280, 854],
+                  (v) => v == 0 ? 'Full screen' : ViewQuality.widthLabel(v),
+                  (v) => state.saveSettings(screenShareMaxWidth: v)),
+            ),
+            SettingsTile(
+              icon: Icons.speed,
+              title: 'Frame rate',
+              subtitle: 'Frames per second (fps), at most',
+              trailing: _dropdown<int>(state.store.screenShareMaxFps, const [30, 60, 90, 120],
+                  (v) => '$v fps', (v) => state.saveSettings(screenShareMaxFps: v)),
+            ),
+            SettingsTile(
+              icon: Icons.network_check,
+              title: 'Bitrate',
+              subtitle: 'At most',
+              trailing: _dropdown<int>(state.store.screenShareMaxBitrate,
+                  const [4000000, 8000000, 16000000, 32000000, 50000000],
+                  ViewQuality.bitrateLabel, (v) => state.saveSettings(screenShareMaxBitrate: v)),
+            ),
+          ],
+        ),
       ];
 
   List<Widget> _controlPage(BuildContext context) => [
@@ -723,33 +754,73 @@ class _SettingsPageState extends State<SettingsPage> {
     ];
   }
 
-  ScreenQuality get _viewQuality =>
-      ScreenQuality.forStore(state.store.screenMaxWidth, state.store.screenMaxFps);
+  // A compact drop-down for a settings row's trailing value.
+  Widget _dropdown<T>(T value, List<T> options, String Function(T) label,
+          void Function(T) set) =>
+      DropdownButton<T>(
+        value: options.contains(value) ? value : options.first,
+        isDense: true,
+        style: TextStyle(fontSize: 14, color: UcColors.text),
+        dropdownColor: UcColors.popup,
+        underline: const SizedBox.shrink(),
+        items: [
+          for (final o in options) DropdownMenuItem(value: o, child: Text(label(o)))
+        ],
+        onChanged: (v) {
+          if (v != null) set(v);
+        },
+      );
 
-  // Watching other devices: what this phone asks them for. The viewer's own
-  // quality menu changes the same setting.
-  List<Widget> _watchingPage(BuildContext context) => [
-        SettingsSection(
-          title: 'Viewing quality',
-          footer: 'What this phone asks for when it watches another device\'s '
-              'screen or camera. A lower one keeps playback smooth on a slow '
-              'connection; the viewer can change it too.',
-          children: [
-            for (final q in ScreenQuality.presets)
-              SettingsTile(
-                icon: Icons.high_quality_outlined,
-                iconColor: q == _viewQuality ? UcColors.accent : UcColors.textSecondary,
-                title: q.label,
-                subtitle: '${q.maxWidth} px wide · ${q.maxFps} fps',
-                trailing: q == _viewQuality
-                    ? Icon(Icons.check, color: UcColors.accent)
-                    : const SizedBox.shrink(),
-                onTap: () => state.saveSettings(
-                    screenMaxWidth: q.maxWidth, screenMaxFps: q.maxFps),
-              ),
-          ],
-        ),
-      ];
+  // Watching other devices: what this phone asks them for. A view's quality
+  // sheet changes the same settings.
+  List<Widget> _watchingPage(BuildContext context) {
+    final store = state.store;
+    return [
+      SettingsSection(
+        title: 'Quality to ask for',
+        footer: 'What this phone asks for when it watches another device\'s '
+            'screen or camera; that device\'s own limits apply too. A lower one '
+            'keeps playback smooth on a slow connection.',
+        children: [
+          SettingsTile(
+            icon: Icons.aspect_ratio,
+            title: 'Resolution',
+            trailing: _dropdown<int>(store.screenMaxWidth, ViewQuality.widths,
+                ViewQuality.widthLabel, (v) => state.saveSettings(screenMaxWidth: v)),
+          ),
+          SettingsTile(
+            icon: Icons.speed,
+            title: 'Frame rate',
+            subtitle: 'Frames per second (fps)',
+            trailing: _dropdown<int>(store.screenMaxFps, ViewQuality.frameRates,
+                (v) => '$v fps', (v) => state.saveSettings(screenMaxFps: v)),
+          ),
+          SettingsTile(
+            icon: Icons.network_check,
+            title: 'Bitrate',
+            subtitle: 'Automatic: as much as the other device allows',
+            trailing: _dropdown<int>(store.viewBitrate, ViewQuality.bitrates,
+                ViewQuality.bitrateLabel, (v) => state.saveSettings(viewBitrate: v)),
+          ),
+        ],
+      ),
+      SettingsSection(
+        title: 'Playback',
+        footer: 'Pictures are shown at the pace they were captured, this long '
+            'after the quickest ones arrive: a longer buffer rides out a bumpier '
+            'network, at the cost of delay. None shows each picture as soon as it '
+            'is decoded.',
+        children: [
+          SettingsTile(
+            icon: Icons.av_timer,
+            title: 'Playback buffer',
+            trailing: _dropdown<int>(store.viewBufferMs, ViewQuality.buffers,
+                ViewQuality.bufferLabel, (v) => state.saveSettings(viewBufferMs: v)),
+          ),
+        ],
+      ),
+    ];
+  }
 
   List<Widget> _aboutPage(BuildContext context) => [
         SettingsSection(
@@ -864,6 +935,14 @@ class _SettingsPageState extends State<SettingsPage> {
             subtitle: 'Frames per second (fps), at most',
             trailing: drop(state.store.cameraMaxFps, const [60, 30, 24, 15],
                 ' fps', (v) => state.saveSettings(cameraMaxFps: v)),
+          ),
+          SettingsTile(
+            icon: Icons.network_check,
+            title: 'Bitrate',
+            subtitle: 'At most',
+            trailing: _dropdown<int>(state.store.cameraMaxBitrate,
+                const [4000000, 8000000, 16000000, 32000000, 50000000],
+                ViewQuality.bitrateLabel, (v) => state.saveSettings(cameraMaxBitrate: v)),
           ),
         ],
       ),

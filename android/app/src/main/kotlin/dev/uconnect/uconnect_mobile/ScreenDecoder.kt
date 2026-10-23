@@ -15,9 +15,15 @@ import java.util.ArrayDeque
 // so a shared desktop screen shows inside a Flutter widget. One decoder per
 // live view session; driven over the "uconnect/screen" MethodChannel:
 //
-//   create()                 -> { textureId }
+//   create(bufferMs)         -> { textureId }
 //   decode(bytes, keyframe, ptsUs)   feed one Annex-B access unit
+//   stats()                  -> { rendered, late } since the last call
 //   dispose()
+//
+// Playout: with a buffer, each picture is rendered at its capture time (its
+// pts) plus the buffer, on the clock of the quickest transit of the last few
+// seconds, so the stream keeps the sender's pace whatever the network does.
+// Without one, each is rendered as soon as it is decoded.
 //
 // The stream carries SPS/PPS inside each keyframe (protocol 7.3), so the codec
 // is configured from the first keyframe and frames flow after that.
@@ -39,6 +45,14 @@ class ScreenDecoder(
     private val pending = ArrayDeque<Unit>()
     private val freeInputs = ArrayDeque<Int>()
 
+    private var bufferNs = 0L
+    // Recent arrivals: (when, arrival minus capture time), for the playout clock.
+    private val transits = ArrayDeque<LongArray>()
+    private var baselineNs = 0L
+    private var haveBaseline = false
+    private var rendered = 0
+    private var late = 0
+
     init {
         channel.setMethodCallHandler(this)
     }
@@ -48,7 +62,8 @@ class ScreenDecoder(
         result: MethodChannel.Result,
     ) {
         when (call.method) {
-            "create" -> result.success(create())
+            "create" -> result.success(create((call.argument<Number>("bufferMs") ?: 0).toLong()))
+            "stats" -> result.success(stats())
             "decode" -> {
                 val bytes = call.argument<ByteArray>("bytes")
                 val keyframe = call.argument<Boolean>("keyframe") ?: false
@@ -65,8 +80,9 @@ class ScreenDecoder(
     }
 
     @Synchronized
-    private fun create(): Map<String, Any> {
+    private fun create(bufferMs: Long): Map<String, Any> {
         disposeDecoder()
+        bufferNs = bufferMs.coerceIn(0, 2000) * 1_000_000
         val e = textures.createSurfaceTexture()
         entry = e
         surface = Surface(e.surfaceTexture())
@@ -113,6 +129,11 @@ class ScreenDecoder(
         }
         if (keyframe) sawKeyframe = true
         if (!sawKeyframe) return
+        val now = System.nanoTime()
+        transits.add(longArrayOf(now, now - ptsUs * 1000))
+        while (transits.size > 1 && now - transits.first()[0] > 5_000_000_000L) transits.removeFirst()
+        baselineNs = transits.minOf { it[1] }
+        haveBaseline = true
         pending.add(Unit(bytes, ptsUs, keyframe))
         drain()
     }
@@ -128,9 +149,24 @@ class ScreenDecoder(
         override fun onOutputBufferAvailable(
             mc: MediaCodec, index: Int, info: MediaCodec.BufferInfo
         ) {
-            // true = render this frame to the output Surface (the texture).
             try {
-                mc.releaseOutputBuffer(index, info.size != 0)
+                synchronized(this@ScreenDecoder) {
+                    if (info.size == 0) {
+                        mc.releaseOutputBuffer(index, false)
+                        return
+                    }
+                    val now = System.nanoTime()
+                    val due = info.presentationTimeUs * 1000 + baselineNs + bufferNs
+                    if (bufferNs <= 0 || !haveBaseline || due - now > 2_000_000_000L) {
+                        mc.releaseOutputBuffer(index, true)
+                    } else if (due <= now) {
+                        late++ // its time has passed: show it now
+                        mc.releaseOutputBuffer(index, true)
+                    } else {
+                        mc.releaseOutputBuffer(index, due) // rendered at that time
+                    }
+                    rendered++
+                }
             } catch (_: IllegalStateException) {
             }
         }
@@ -165,6 +201,14 @@ class ScreenDecoder(
     }
 
     @Synchronized
+    private fun stats(): Map<String, Any> {
+        val result = mapOf("rendered" to rendered, "late" to late, "bufferMs" to bufferNs / 1_000_000)
+        rendered = 0
+        late = 0
+        return result
+    }
+
+    @Synchronized
     private fun disposeDecoder() {
         try {
             codec?.stop()
@@ -179,6 +223,10 @@ class ScreenDecoder(
         sawKeyframe = false
         pending.clear()
         freeInputs.clear()
+        transits.clear()
+        haveBaseline = false
+        rendered = 0
+        late = 0
         surface?.release()
         surface = null
         entry?.release()

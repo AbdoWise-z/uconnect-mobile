@@ -207,6 +207,10 @@ class AppState extends ChangeNotifier {
     cameraCapture.offeredIds = store.cameraOffered;
     cameraHost.maxWidthCap = store.cameraMaxWidth;
     cameraHost.maxFpsCap = store.cameraMaxFps;
+    cameraHost.maxBitrateCap = store.cameraMaxBitrate;
+    screenHost.maxWidthCap = store.screenShareMaxWidth;
+    screenHost.maxFpsCap = store.screenShareMaxFps;
+    screenHost.maxBitrateCap = store.screenShareMaxBitrate;
     session.setLocalHello(Hello(
       name: store.deviceName,
       os: Platform.isAndroid
@@ -326,6 +330,12 @@ class AppState extends ChangeNotifier {
     int? relayMode,
     int? screenMaxWidth,
     int? screenMaxFps,
+    int? viewBitrate,
+    int? viewBufferMs,
+    int? screenShareMaxWidth,
+    int? screenShareMaxFps,
+    int? screenShareMaxBitrate,
+    int? cameraMaxBitrate,
     String? colorScheme,
   }) async {
     if (server != null) store.server = server.trim();
@@ -343,6 +353,12 @@ class AppState extends ChangeNotifier {
     if (relayMode != null) store.relayMode = relayMode;
     if (screenMaxWidth != null) store.screenMaxWidth = screenMaxWidth;
     if (screenMaxFps != null) store.screenMaxFps = screenMaxFps;
+    if (viewBitrate != null) store.viewBitrate = viewBitrate;
+    if (viewBufferMs != null) store.viewBufferMs = viewBufferMs;
+    if (screenShareMaxWidth != null) store.screenShareMaxWidth = screenShareMaxWidth;
+    if (screenShareMaxFps != null) store.screenShareMaxFps = screenShareMaxFps;
+    if (screenShareMaxBitrate != null) store.screenShareMaxBitrate = screenShareMaxBitrate;
+    if (cameraMaxBitrate != null) store.cameraMaxBitrate = cameraMaxBitrate;
     if (colorScheme != null) store.colorScheme = colorScheme;
     await store.save();
     _applyLocalConfig();
