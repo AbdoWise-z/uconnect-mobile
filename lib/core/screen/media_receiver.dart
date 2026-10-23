@@ -83,14 +83,16 @@ class ReceiverStats {
 }
 
 class MediaReceiver {
-  MediaReceiver({required this.session, required this.kind, int fps = 30}) : interval = 1000 ~/ fps.clamp(1, maxFps);
+  MediaReceiver({required this.session, required this.kind, int fps = 30})
+      : interval = 1000 ~/ fps.clamp(1, maxFps),
+        // Frames may wait the lag budget for repair: room for twice that many.
+        _maxPendingFrames = max(32, 2 * fps.clamp(1, maxFps) * lagBudgetMs ~/ 1000);
 
   static const int feedbackIntervalMs = 50, keepAliveMs = 500;
-  static const int _maxPendingFrames = 32;
   static const int _nackAfterMs = 10; // a gap this old is asked for
   static const int _missingForgetMs = 2000;
 
-  final int session, kind, interval;
+  final int session, kind, interval, _maxPendingFrames;
   bool waiting = true, _haveLast = false, keyWanted = false;
   int _last = 0;
   final _frames = SplayTreeMap<int, _Assembly>();
@@ -115,9 +117,14 @@ class MediaReceiver {
     _arrivals[seq] = nowMs;
     _newestArrivalMs = nowMs;
     if (!_haveSeq) {
+      // A session's numbers start at 0: whatever came before the first
+      // packet seen is missing too (the first packets of a keyframe, say).
       _haveSeq = true;
       _highestSeq = seq;
-      _feedbackBase = seq;
+      _feedbackBase = seq < 64 ? 0 : seq;
+      for (var s = _feedbackBase; s < seq; s++) {
+        _missing[s] = nowMs;
+      }
       return;
     }
     if (seqNewer(seq, _highestSeq)) {
@@ -141,7 +148,7 @@ class MediaReceiver {
 
   /// The playout delay that would show every frame on time, from the jitter
   /// and the time gaps take to fill; the caller smooths it.
-  int suggestedPlayoutMs() => (interval + 2 * jitterMs + repairDelayMs).round().clamp(20, 500);
+  int suggestedPlayoutMs() => (interval + 2 * jitterMs + repairDelayMs).round().clamp(20, lagBudgetMs);
 
   /// A media or repair packet; returns the frames now complete and in order.
   List<EncodedFrame> receive(Uint8List packet, int nowMs) {
@@ -161,7 +168,7 @@ class MediaReceiver {
         return const [];
       }
       if (_frames.length >= _maxPendingFrames) {
-        _give(_frames.firstKey()!);
+        _give(_frames.firstKey()!, nowMs);
         waiting = true;
         keyWanted = true;
       }
@@ -237,24 +244,31 @@ class MediaReceiver {
     return out;
   }
 
-  void _give(int number) {
+  /// Diagnostics: why frames were given up (the last few).
+  final giveLog = <String>[];
+
+  void _give(int number, int nowMs) {
     final a = _frames.remove(number);
     if (a == null) return;
     _stats.givenUp++;
+    if (giveLog.length < 12) {
+      giveLog.add('frame $number ${a.got}/${a.count}${a.frame.keyframe ? 'k' : ''} age ${nowMs - a.firstMs} '
+          'idle ${nowMs - a.lastMs} missing ${_missing.length} pending ${_frames.length}');
+    }
     _forgetMissing(a.lowSeq, a.highSeq);
   }
 
   /// Gives up on frames too old to complete; call often (each tick).
   void expire(int nowMs) {
-    // A frame that has made no progress for a while (repeats had their
-    // chance: several round trips) is given up with those behind it that
+    // A frame that has made no progress for the lag budget (repeats had
+    // their chance: many round trips) is given up with those behind it that
     // depend on it; the stream restarts at the next keyframe. A big frame
     // still arriving is not stuck, however long it takes.
-    final giveUpMs = max(400, 8 * interval);
+    final giveUpMs = max(lagBudgetMs, 8 * interval);
     for (final number in _frames.keys.toList()) {
       final a = _frames[number]!;
       if (a.complete || nowMs - a.lastMs < giveUpMs) continue;
-      _give(number);
+      _give(number, nowMs);
       waiting = true;
       keyWanted = true;
     }

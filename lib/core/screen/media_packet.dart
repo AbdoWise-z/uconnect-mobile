@@ -14,6 +14,10 @@ const int mediaPayload = maxDatagram - mediaHeader - fecHeader;
 const int maxFrameBytes = 4 * 1024 * 1024;
 const int maxFragments = (maxFrameBytes + mediaPayload - 1) ~/ mediaPayload;
 const int maxFps = 165;
+/// The lag budget: how far behind live a viewer may fall before the stream
+/// is brought back (a keyframe), and how long it waits for a frame's repair.
+/// Within it, lag is taken up by playing a little faster.
+const int lagBudgetMs = 1000;
 const int minBitrate = 150000;
 const int maxBitrate = 100000000;
 

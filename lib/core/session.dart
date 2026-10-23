@@ -145,13 +145,9 @@ class SessionOptions {
   /// Force the node through the relay (skip punching) only in "always" mode.
   bool get forceRelay => relayMode == 1;
 
-  /// How a media datagram channel may fall back: direct-only in "direct" mode,
-  /// through the relay in "always", otherwise TCP (which the relay carries).
-  int get mediaFallback => relayMode == 2
-      ? ucFallbackNone
-      : relayMode == 1
-          ? ucFallbackRelay
-          : ucFallbackTcp;
+  /// How a media datagram channel may fall back: nowhere in "direct" mode,
+  /// otherwise through the relay. Media is never carried over TCP.
+  int get mediaFallback => relayMode == 2 ? ucFallbackNone : ucFallbackRelay;
 }
 
 /// A control-message handler: returns true when it consumed the message.
@@ -185,7 +181,7 @@ class Session {
 
   /// The datagram fallback the current relay mode allows for media channels;
   /// screen_viewer/host open their channels with it.
-  int mediaFallback = ucFallbackTcp;
+  int mediaFallback = ucFallbackRelay;
   String? selfId;
 
   bool _published = false;

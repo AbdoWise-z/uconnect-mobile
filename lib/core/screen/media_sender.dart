@@ -1,12 +1,13 @@
 // The sending side of a media session, the way real-time services send:
 // frames are cut into numbered packets, with repair packets when the path
 // loses some, and paced out at a steady rate a little above the bitrate the
-// estimator allows rather than a burst per frame. The queue is short: while
-// it is deep the capture is told to skip (an encoded frame is never dropped:
-// the frames after it would be useless), so what reaches the viewer is
-// recent. The receiver's feedback drives the bandwidth estimate, repeats of
-// lost packets, keyframes, and the lag. The same algorithm as the desktop's
-// MediaSender.cpp.
+// estimator allows rather than a burst per frame. The queue normally drains as fast as it
+// fills; it may swell to a lag budget of a second (a burst, a spell of
+// loss) before the capture is told to skip (an encoded frame is never
+// dropped: the frames after it would be useless), and a viewer that falls
+// behind the budget is brought back with a keyframe. The receiver's feedback
+// drives the bandwidth estimate, repeats of lost packets, keyframes, and the
+// lag. The same algorithm as the desktop's MediaSender.cpp.
 
 import 'dart:math';
 import 'dart:typed_data';
@@ -30,21 +31,17 @@ class MediaSender {
     this.minBps = 150000,
     this.maxBps = 100000000,
     this.pacingGain = 1.5,
-    this.queueMs = 150,
-    this.inflightMs = 300,
-    this.reliable = false,
+    this.queueMs = lagBudgetMs,
     int fps = 30,
   })  : fps = max(1, fps),
         _bwe = BandwidthEstimator(startBps: startBps, minBps: minBps, maxBps: maxBps);
 
   static const int _sentHistoryMs = 2000; // packets kept for repeats
   static const int _repeatSpacingMs = 40; // one repeat of a packet per this long
-  static const int behindMs = 600; // the viewer this far behind: start over from a keyframe
   static const int _maxBurstBytes = 3 * maxDatagram;
 
-  final int kind, session, minBps, maxBps, queueMs, inflightMs;
+  final int kind, session, minBps, maxBps, queueMs;
   final double pacingGain;
-  bool reliable; // the path is TCP: nothing is lost, it queues
   int fps;
   final BandwidthEstimator _bwe;
   final _seq = SeqCounter();
@@ -53,8 +50,8 @@ class MediaSender {
   double _budgetBytes = 3 * maxDatagram.toDouble();
   int _lastPumpMs = 0;
   final _sent = <int, _Sent>{}; // recent packets by sequence, for repeats and feedback
-  int inflightBytes = 0;
   double rttMs = 0, lagMs = 0;
+  int _lagSinceMs = -1, _lagCutMs = -100000; // the viewer behind by half the budget: since when, last cut
   int fecGroup = 0;
   int lastSentCaptureMs = 0;
   bool awaitKey = false; // the next frame must be a keyframe
@@ -95,7 +92,7 @@ class MediaSender {
     // two fragments when it loses a lot, one per fragment (each sent twice,
     // in effect) when it loses most of a spell.
     final loss = max(_bwe.lossRate, _bwe.burstLossRate);
-    fecGroup = reliable || loss < 0.02 ? 0 : loss < 0.08 ? 8 : loss < 0.20 ? 4 : loss < 0.45 ? 2 : 1;
+    fecGroup = loss < 0.02 ? 0 : loss < 0.08 ? 8 : loss < 0.20 ? 4 : loss < 0.45 ? 2 : 1;
     // A keyframe is big and everything after it depends on it: protected
     // more, so it needs fewer repeats.
     final group = frame.keyframe && fecGroup > 2 ? 2 : fecGroup;
@@ -115,24 +112,9 @@ class MediaSender {
     return true;
   }
 
-  /// Capturing should pause: the queue, or what is still unacknowledged on a
-  /// reliable path, is deep enough that a new frame would only add lag.
-  bool shouldSkipCapture() {
-    final target = _bwe.targetBps;
-    if (queuedBytes > target * queueMs ~/ 8000) return true;
-    if (reliable && inflightBytes > _inflightLimit) return true;
-    return false;
-  }
-
-  /// Over a reliable path what is unacknowledged is what waits in the socket
-  /// and the network: bounded, or the lag grows unseen. At least a round trip
-  /// and a half of it, though (the quickest seen: queueing lengthens the
-  /// others, and a bound that grew with it would bound nothing), or a long
-  /// path could never carry the rate.
-  int get _inflightLimit => _bwe.targetBps * max(inflightMs, (1.5 * minRttMs).round()) ~/ 8000;
-  double minRttMs = 0;
-  int _reliableSinceMs = -1; // when the path became reliable, as seen by pump
-  bool _wasReliable = false;
+  /// Capturing should pause: the queue is deep enough (the lag budget) that
+  /// a new frame would only add lag.
+  bool shouldSkipCapture() => queuedBytes > _bwe.targetBps * queueMs ~/ 8000;
 
   /// Sends what the pacing budget allows; call every few milliseconds.
   /// Returns false if the transport refused a packet (try again soon).
@@ -141,26 +123,19 @@ class MediaSender {
     // packets in order; a frame's packets leave a few at a time.
     final rate = _bwe.targetBps * pacingGain / 8000; // bytes per ms
     if (_lastPumpMs != 0) _budgetBytes = min(_budgetBytes + rate * (nowMs - _lastPumpMs), _maxBurstBytes + rate * 5);
-    if (reliable != _wasReliable) {
-      _wasReliable = reliable;
-      _reliableSinceMs = reliable ? nowMs : -1;
-    }
     final weight = _lastPumpMs != 0 && _smoothEncoderBps > 0 ? min(1.0, (nowMs - _lastPumpMs) / 1000) : 1.0;
     _smoothEncoderBps += (encoderBps - _smoothEncoderBps) * weight;
     _lastPumpMs = nowMs;
     _trimSent(nowMs);
-    final inflightLimit = _inflightLimit;
     while (_queue.isNotEmpty) {
       final p = _queue.first;
       final size = p.size;
       if (_budgetBytes < size) break;
-      if (reliable && inflightBytes + size > inflightLimit) break;
       if (!p.retransmit) p.seq = _seq.take(); // a repeat keeps the number the receiver asked for
       final bytes = encodeMedia(p);
       if (!send(bytes)) return false; // refused for now (the path is still opening, or TCP pushes back)
       _budgetBytes -= size;
       queuedBytes -= size;
-      inflightBytes += size;
       final before = _sent[p.seq];
       _sent[p.seq] = _Sent(bytes, nowMs, before?.lastRepeatMs ?? 0, size); // a repeat keeps its spacing
       _queue.removeAt(0);
@@ -169,16 +144,7 @@ class MediaSender {
   }
 
   void _trimSent(int nowMs) {
-    _sent.removeWhere((seq, s) {
-      if (nowMs - s.sentMs <= _sentHistoryMs) return false;
-      // On a reliable path an unacknowledged packet is still queued somewhere
-      // on the way, however old: it stays counted (within reason), or the
-      // bound would let the queue grow unseen.
-      if (reliable && !s.acknowledged && !s.lost && nowMs - s.sentMs < 10 * _sentHistoryMs) return false;
-      if (!s.acknowledged && !s.lost) inflightBytes -= s.size;
-      return true;
-    });
-    if (inflightBytes < 0) inflightBytes = 0;
+    _sent.removeWhere((seq, s) => nowMs - s.sentMs > _sentHistoryMs);
   }
 
   /// The receiver's feedback: arrivals (the bandwidth estimate), repeats,
@@ -193,13 +159,9 @@ class MediaSender {
       final s = _sent[seq];
       if (s == null || s.acknowledged) continue;
       if (f.arrivals[i] == Feedback.missing) {
-        if (!s.lost) {
-          s.lost = true;
-          inflightBytes -= s.size;
-        }
+        s.lost = true;
         results.add(PacketResult(sendMs: s.sentMs, arrivalMs: 0, bytes: s.size, received: false));
       } else {
-        if (!s.lost) inflightBytes -= s.size;
         s.acknowledged = true;
         s.lost = false;
         final arrival = f.refTimeMs + f.arrivals[i] / 4;
@@ -207,24 +169,14 @@ class MediaSender {
         if (s.sentMs > newestSentMs) newestSentMs = s.sentMs;
       }
     }
-    if (inflightBytes < 0) inflightBytes = 0;
     // Round trip: from the newest reported packet leaving to its feedback
     // arriving, less the time the receiver held the feedback.
     if (newestSentMs >= 0) {
       final rtt = max(1.0, (nowMs - newestSentMs).toDouble() - f.heldMs);
       rttMs = rttMs > 0 ? 0.8 * rttMs + 0.2 * rtt : rtt;
-      minRttMs = minRttMs > 0 ? min(minRttMs, rtt) : rtt;
     }
     results.sort((a, b) => a.sendMs.compareTo(b.sendMs));
     if (results.isNotEmpty) _bwe.onFeedback(results, nowMs, rttMs);
-    // On a reliable path the bound on what is in flight is what limits
-    // sending when the path cannot drain it: the rate follows what arrives.
-    // Not in the path's first moments (opening, or just moved to TCP), when
-    // what arrives says little.
-    if (reliable && _reliableSinceMs >= 0 && nowMs - _reliableSinceMs > 2000 && results.isNotEmpty &&
-        inflightBytes >= 0.9 * _inflightLimit && _bwe.receiveBps > 0) {
-      _bwe.limitTo((0.85 * _bwe.receiveBps).toInt());
-    }
     // Repeats: what it still wants, once per 40 ms each, while it is recent.
     for (final seq in f.nacks) {
       final s = _sent[seq];
@@ -241,10 +193,23 @@ class MediaSender {
       }
     }
     // Lag: the newest frame it has against the newest queued, on this clock.
+    // Beyond the budget, the queue is dropped and the stream starts over
+    // from a keyframe; above half of it for a couple of seconds, the path is
+    // not carrying the rate (a loss figure never shows that on a path that
+    // queues), and the target comes down.
     if (f.haveLatest) lagMs = max(0, ((lastSentCaptureMs - f.latestCaptureMs) & 0xFFFFFFFF).toSigned(32)).toDouble();
-    if (lagMs > behindMs && nowMs - _behindAt > 1500) {
+    if (lagMs > lagBudgetMs && nowMs - _behindAt > 1500) {
       _behindAt = nowMs;
       dropQueued();
+    }
+    if (lagMs > lagBudgetMs / 2) {
+      _lagSinceMs = _lagSinceMs < 0 ? nowMs : _lagSinceMs;
+      if (nowMs - _lagSinceMs > 2000 && nowMs - _lagCutMs > 2000) {
+        _lagCutMs = nowMs;
+        _bwe.limitTo((0.85 * _bwe.targetBps).toInt());
+      }
+    } else {
+      _lagSinceMs = -1;
     }
     if (f.keyframeWanted) awaitKey = true;
   }

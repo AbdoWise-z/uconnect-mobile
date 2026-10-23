@@ -89,6 +89,16 @@ class BandwidthEstimator {
         continue;
       }
       got++;
+      // The receiver's clock jumped (its reference wrapped or restarted):
+      // nothing before compares with what follows.
+      if (_haveSample && (r.arrivalMs - _previousArrivalMs).abs() > 3600000) {
+        _haveSample = false;
+        _samples.clear();
+        _deltas = 0;
+        _received.clear();
+        _lastArrivalMs = 0;
+        _accumulatedDelayMs = _smoothedDelayMs = 0;
+      }
       _received.add([r.arrivalMs, r.bytes]);
       if (r.arrivalMs > _lastArrivalMs) _lastArrivalMs = r.arrivalMs;
       if (!_haveSample) {

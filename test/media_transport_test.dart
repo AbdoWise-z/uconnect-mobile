@@ -55,11 +55,10 @@ class Link {
 }
 
 class Run {
-  Run({this.fps = 30, this.seconds = 10, Link? forward, Link? back, this.startBps = 1500000, this.reliable = false})
+  Run({this.fps = 30, this.seconds = 10, Link? forward, Link? back, this.startBps = 1500000})
       : forward = forward ?? Link(),
         back = back ?? Link();
   final int fps, seconds, startBps;
-  final bool reliable;
   final Link forward, back;
   int framesSent = 0, framesDelivered = 0, skipped = 0, keyframes = 0;
   final lagMs = <double>[];
@@ -68,7 +67,7 @@ class Run {
   late ReceiverStats stats;
 
   void go() {
-    final sender = MediaSender(kind: 1, session: 7, startBps: startBps, reliable: reliable, fps: fps);
+    final sender = MediaSender(kind: 1, session: 7, startBps: startBps, fps: fps);
     final receiver = MediaReceiver(session: 7, kind: 1, fps: fps);
     final interval = 1000 / fps;
     var nextFrame = 0.0, number = 0;
@@ -105,6 +104,7 @@ class Run {
       }
     }
     stats = receiver.report();
+    perSecond.addAll(receiver.giveLog);
   }
 
   double lagPercentile(double p, [int fromSecond = 0]) {
@@ -214,7 +214,8 @@ void main() {
     final run = Run(seconds: 6, startBps: 4000000)..go();
     printOnFailure(run.text);
     expect(run.framesDelivered >= run.framesSent - 2, isTrue, reason: run.text);
-    expect(run.lagPercentile(.95) < 80, isTrue, reason: run.text);
+    // The first second queues up to the lag budget while the rate climbs.
+    expect(run.lagPercentile(.95, 2) < 80, isTrue, reason: run.text);
     expect(run.targets.last > 4000000, isTrue, reason: run.text);
   });
 
@@ -233,12 +234,5 @@ void main() {
     expect(target < 1650000 && target > 700000, isTrue, reason: run.text);
     expect(run.lagPercentile(.95, 4) < 400, isTrue, reason: run.text);
     expect(run.framesDelivered > run.framesSent * 0.7, isTrue, reason: run.text);
-  });
-
-  test('a reliable path stays bounded by what is in flight', () {
-    final run = Run(seconds: 12, startBps: 4000000, reliable: true, forward: Link(reliable: true, bottleneckBps: 800000, queueMs: 5000))..go();
-    printOnFailure(run.text);
-    expect(run.lagPercentile(.95, 4) < 700, isTrue, reason: run.text);
-    expect(run.targets.last < 1000000, isTrue, reason: run.text);
   });
 }

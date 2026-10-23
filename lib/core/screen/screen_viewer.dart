@@ -137,7 +137,9 @@ class ScreenViewer {
   // The media session (7.1, 7.2): reassembly, repair, feedback.
   MediaReceiver? _media;
   Timer? _tick;
+  // Offset so the clock is never near zero: the feedback reference time is 16 s before now.
   final _clock = Stopwatch()..start();
+  int get _now => _clock.elapsedMilliseconds + 60000;
 
   // Counters for the overlay, reset each second.
   int _frames = 0;
@@ -412,7 +414,7 @@ class ScreenViewer {
     if (kind != _videoKind || packetType(d) == PacketType.feedback) return;
     _bytes += d.length;
     _packets++;
-    final now = _clock.elapsedMilliseconds;
+    final now = _now;
     final frames = media.receive(d, now);
     for (final f in frames) {
       _frames++;
@@ -427,7 +429,7 @@ class ScreenViewer {
   void _onTick() {
     final media = _media;
     if (media == null || state != ViewerState.active) return;
-    final now = _clock.elapsedMilliseconds;
+    final now = _now;
     media.expire(now);
     if (media.feedbackDue(now)) _sendFeedback(media, now);
     if (now - _autoAt >= 250) {

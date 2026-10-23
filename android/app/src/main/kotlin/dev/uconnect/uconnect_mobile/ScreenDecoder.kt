@@ -46,12 +46,34 @@ class ScreenDecoder(
     private val freeInputs = ArrayDeque<Int>()
 
     private var bufferNs = 0L
-    // Recent arrivals: (when, arrival minus capture time), for the playout clock.
+    // Recent arrivals: (when, arrival minus capture time) of the last 15 s.
+    // The playout clock (offsetNs, added to a capture time with the buffer
+    // to give its render time) follows their low percentile, slewing at
+    // most a tenth faster or slower than real time, so a change in the
+    // path's delay is taken up gradually rather than as a jump or a freeze.
     private val transits = ArrayDeque<LongArray>()
-    private var baselineNs = 0L
-    private var haveBaseline = false
+    private var offsetNs = 0L
+    private var haveClock = false
+    private var clockAtNs = 0L
+    private var lastRenderNs = 0L
+    private var lastPtsUs = 0L
+    private var intervalNs = 16_666_667L
     private var rendered = 0
     private var late = 0
+    private val lagBudgetNs = 1_000_000_000L
+
+    private fun updateClock(now: Long) {
+        if (transits.isEmpty()) return
+        val sorted = transits.map { it[1] }.sorted()
+        val target = sorted[minOf(sorted.size - 1, sorted.size / 20)] // the 5th percentile
+        if (!haveClock || Math.abs(target - offsetNs) > lagBudgetNs) {
+            offsetNs = target; haveClock = true
+        } else {
+            val step = (now - clockAtNs).coerceAtLeast(0) / 10
+            offsetNs += (target - offsetNs).coerceIn(-step, step)
+        }
+        clockAtNs = now
+    }
 
     init {
         channel.setMethodCallHandler(this)
@@ -137,9 +159,10 @@ class ScreenDecoder(
         if (!sawKeyframe) return
         val now = System.nanoTime()
         transits.add(longArrayOf(now, now - ptsUs * 1000))
-        while (transits.size > 1 && now - transits.first()[0] > 5_000_000_000L) transits.removeFirst()
-        baselineNs = transits.minOf { it[1] }
-        haveBaseline = true
+        while (transits.size > 1 && now - transits.first()[0] > 15_000_000_000L) transits.removeFirst()
+        if (lastPtsUs != 0L && ptsUs > lastPtsUs) intervalNs = ((ptsUs - lastPtsUs) * 1000).coerceIn(4_000_000L, 200_000_000L)
+        lastPtsUs = ptsUs
+        updateClock(now)
         pending.add(Unit(bytes, ptsUs, keyframe))
         drain()
     }
@@ -162,13 +185,17 @@ class ScreenDecoder(
                         return
                     }
                     val now = System.nanoTime()
-                    val due = info.presentationTimeUs * 1000 + baselineNs + bufferNs
-                    if (bufferNs <= 0 || !haveBaseline || due - now > 2_000_000_000L) {
-                        mc.releaseOutputBuffer(index, true)
-                    } else if (due <= now) {
-                        late++ // its time has passed: show it now
+                    var due = info.presentationTimeUs * 1000 + offsetNs + bufferNs
+                    if (bufferNs <= 0 || !haveClock || due - now > 2_000_000_000L) {
                         mc.releaseOutputBuffer(index, true)
                     } else {
+                        val overdue = now - due
+                        if (overdue > intervalNs) late++ // behind its time
+                        // Behind: shown a tenth faster than captured, never skipped,
+                        // unless the lag has passed the budget: then at once.
+                        if (overdue > 0 && overdue <= lagBudgetNs) due = maxOf(now, lastRenderNs + intervalNs * 9 / 10)
+                        else if (overdue > lagBudgetNs) due = now
+                        lastRenderNs = due
                         mc.releaseOutputBuffer(index, due) // rendered at that time
                     }
                     rendered++
@@ -230,7 +257,10 @@ class ScreenDecoder(
         pending.clear()
         freeInputs.clear()
         transits.clear()
-        haveBaseline = false
+        haveClock = false
+        transits.clear()
+        lastRenderNs = 0L
+        lastPtsUs = 0L
         rendered = 0
         late = 0
         surface?.release()

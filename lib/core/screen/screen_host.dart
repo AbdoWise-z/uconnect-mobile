@@ -12,7 +12,7 @@ import 'dart:typed_data';
 
 import '../permissions.dart';
 import '../session.dart';
-import '../../uconnect/uconnect.dart' show ucPathDirect, ucPathTcp;
+import '../../uconnect/uconnect.dart' show ucPathDirect;
 import 'media_packet.dart';
 import 'media_sender.dart';
 import 'remote_input.dart';
@@ -93,7 +93,9 @@ class ScreenHost {
   static const int _pumpMs = 3;
 
   // Per-second statistics for the viewer ($prefix.stats).
+  // Offset so the clock is never near zero: the feedback reference time is 16 s before now.
   final _clock = Stopwatch()..start();
+  int get _now => _clock.elapsedMilliseconds + 60000;
   Timer? _statsTimer;
   int _statsAt = 0, _statsUnits = 0, _statsBytes = 0, _statsSkipped = 0;
 
@@ -178,7 +180,7 @@ class ScreenHost {
     final media = _media;
     if (media == null || dev != _viewer || d.length < 2 || d[0] != videoKind) return;
     if (packetType(d) != PacketType.feedback) return;
-    media.onFeedback(d, _clock.elapsedMilliseconds);
+    media.onFeedback(d, _now);
   }
 
   bool _is(Map<String, Object?> msg, String field) =>
@@ -249,7 +251,6 @@ class ScreenHost {
       startBps: min(cap, path == ucPathDirect ? 3000000 : 1500000),
       maxBps: cap,
       fps: _fps,
-      reliable: path == ucPathTcp,
     );
 
     // The sources on offer (cameras); the viewer gets this list and may switch.
@@ -319,7 +320,7 @@ class ScreenHost {
     }
 
     _auSub = capture.accessUnits().listen(_onAccessUnit);
-    _statsAt = _clock.elapsedMilliseconds;
+    _statsAt = _now;
     _statsUnits = _statsBytes = _statsSkipped = 0;
     _statsTimer?.cancel();
     _statsTimer = Timer.periodic(const Duration(seconds: 1), (_) => _sendStats());
@@ -435,18 +436,16 @@ class ScreenHost {
     final media = _media;
     final dev = _viewer;
     if (media == null || dev == null || state != HostState.sharing) return;
-    final now = _clock.elapsedMilliseconds;
+    final now = _now;
     media.pump(now, (dg) => session.node?.sendDatagram(session.topicId, dev, dg) ?? false);
     if (media.takeKeyframeWanted(now)) capture.requestKeyframe();
   }
 
-  // The encoder follows the estimate (less the repair packets' share), and
-  // the sender learns whether the path is TCP (the channel fell back to it).
+  // The encoder follows the estimate (less the repair packets' share).
   void _steer() {
     final media = _media;
     final dev = _viewer;
     if (media == null || dev == null || state != HostState.sharing) return;
-    media.reliable = (session.node?.datagramPath(session.topicId, dev) ?? 0) == ucPathTcp;
     final bps = media.encoderBps;
     if ((bps - _encoderBps).abs() * 10 > _encoderBps) {
       _encoderBps = bps;
@@ -473,7 +472,7 @@ class ScreenHost {
     if (_resizing || !_canResize) return;
     // A change costs a keyframe and takes a moment to show in the rates:
     // one at a time, a second and a half apart.
-    if (_clock.elapsedMilliseconds - _qualityChangedMs < 1500) return;
+    if (_now - _qualityChangedMs < 1500) return;
     final bps = media.smoothedEncoderBps;
     final atFps = (_maxFps / 30).clamp(0.5, 4.0);
     final down = media.pathLimited && !media.applicationLimited;
@@ -520,7 +519,7 @@ class ScreenHost {
       _askWidth = width;
       _fps = fps;
       media.fps = fps;
-      _qualityChangedMs = _clock.elapsedMilliseconds;
+      _qualityChangedMs = _now;
       _width = size.width.toInt();
       _height = size.height.toInt();
       _notify();
@@ -534,7 +533,7 @@ class ScreenHost {
     final dev = _viewer;
     final media = _media;
     if (dev == null || media == null || state != HostState.sharing) return;
-    final now = _clock.elapsedMilliseconds;
+    final now = _now;
     final span = max(1, now - _statsAt);
     session.sendControl(dev, {
       't': '$prefix.stats',
@@ -548,7 +547,7 @@ class ScreenHost {
       'width': _width,
       'dropped': _statsSkipped * 1000 / span,
       'senderDrops': _skipped + media.dropped,
-      'transport': media.reliable ? 'tcp' : 'udp',
+      'transport': 'udp',
       'lagMs': media.lagMs,
       'rttMs': media.rttMs,
       'lossPct': media.lossRate * 100,
