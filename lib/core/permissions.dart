@@ -74,7 +74,7 @@ const List<PermissionInfo> permissionTable = [
       service: 'camera',
       label: 'Without asking',
       description:
-          'View the camera without a consent prompt. Trusted devices only.',
+          'View the camera without a consent prompt. Only through special or network rules.',
       available: true,
       trustedOnly: true),
   PermissionInfo(
@@ -89,7 +89,7 @@ const List<PermissionInfo> permissionTable = [
       service: 'screen',
       label: 'Without asking',
       description:
-          'View the screen without a consent prompt. Trusted devices only.',
+          'View the screen without a consent prompt. Only through special or network rules.',
       available: true,
       trustedOnly: true),
   PermissionInfo(
@@ -104,7 +104,7 @@ const List<PermissionInfo> permissionTable = [
       service: 'control',
       label: 'Without asking',
       description:
-          'Control this device without a consent prompt. Trusted devices only.',
+          'Control this device without a consent prompt. Only through special or network rules.',
       available: true,
       trustedOnly: true),
   PermissionInfo(
@@ -119,7 +119,7 @@ const List<PermissionInfo> permissionTable = [
       service: 'display',
       label: 'Without asking',
       description:
-          'Use this device\'s screen as a monitor without a consent prompt. Trusted devices only.',
+          'Use this device\'s screen as a monitor without a consent prompt. Only through special or network rules.',
       available: false,
       trustedOnly: true),
 ];
@@ -136,6 +136,10 @@ Set<String> normalizePermissions(Iterable<String> ids) => {
         if (id == 'storage.download') Perm.storageRead else id
     };
 
-/// Untrusted devices never hold trusted-only grants, whatever is saved.
-Set<String> permissionsForUntrusted(Set<String> permissions) =>
-    {...permissions}..removeWhere(isTrustedOnlyPermission);
+/// Sensitive permissions (camera, screen, control, display -- `trustedOnly`
+/// in the table) come only from special or network rules, never the defaults.
+bool isSensitivePermission(String id) => isTrustedOnlyPermission(id);
+
+/// [permissions] without the sensitive ones: what the defaults may hold.
+Set<String> withoutSensitive(Set<String> permissions) =>
+    {...permissions}..removeWhere(isSensitivePermission);

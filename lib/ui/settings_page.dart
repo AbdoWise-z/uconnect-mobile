@@ -1,5 +1,5 @@
 // Settings: an overview of grouped rows (this device, appearance, topic,
-// what is shared, permissions and trust, about), each opening a focused page
+// what is shared, permissions, about), each opening a focused page
 // -- the mobile SettingsWindow.
 
 import 'dart:io';
@@ -16,6 +16,7 @@ import '../core/identity.dart';
 import '../core/permissions.dart';
 import '../core/session.dart';
 import 'prompt_dialog.dart';
+import 'network_rules_page.dart';
 import 'scheme_picker.dart';
 import 'settings_widgets.dart';
 import 'theme.dart';
@@ -44,7 +45,8 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     final store = state.store;
-    final trustedCount = store.trusted.length;
+    final specialCount = store.special.length;
+    final ruleCount = state.networkRules.length;
     final defaultsCount = store.defaultPermissions.length;
     return ListView(
       padding: const EdgeInsets.only(bottom: 28),
@@ -97,26 +99,40 @@ class _SettingsPageState extends State<SettingsPage> {
             onTap: () => _open('Remote control', _controlPage),
           ),
         ]),
-        SettingsSection(title: 'Permissions & trust', children: [
-          SettingsTile(
-            icon: Icons.shield_outlined,
-            iconColor: UcColors.textSecondary,
-            title: 'Devices that are not trusted',
-            subtitle: defaultsCount == 0
-                ? 'May do nothing'
-                : '$defaultsCount permission${defaultsCount == 1 ? '' : 's'} allowed',
-            onTap: () => _open('Untrusted devices', _defaultsPage),
-          ),
-          SettingsTile(
-            icon: Icons.verified_user_outlined,
-            iconColor: UcColors.success,
-            title: 'Trusted devices',
-            subtitle: trustedCount == 0
-                ? 'None yet'
-                : '$trustedCount device${trustedCount == 1 ? '' : 's'}',
-            onTap: () => _open('Trusted devices', _trustedPage),
-          ),
-        ]),
+        SettingsSection(
+          title: 'Permissions',
+          footer: 'For each device the first of these applies: its special '
+              'rules, then this topic\'s network rules, then the defaults.',
+          children: [
+            SettingsTile(
+              icon: Icons.verified_user_outlined,
+              iconColor: UcColors.success,
+              title: 'Devices with special rules',
+              subtitle: specialCount == 0
+                  ? 'None yet'
+                  : '$specialCount device${specialCount == 1 ? '' : 's'}',
+              onTap: () => _open('Special rules', _specialPage),
+            ),
+            SettingsTile(
+              icon: Icons.lan_outlined,
+              title: 'Network rules',
+              subtitle: ruleCount == 0
+                  ? 'None for this topic'
+                  : '$ruleCount rule${ruleCount == 1 ? '' : 's'} for this topic',
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                  builder: (_) => NetworkRulesPage(state: state))),
+            ),
+            SettingsTile(
+              icon: Icons.shield_outlined,
+              iconColor: UcColors.textSecondary,
+              title: 'Default permissions',
+              subtitle: defaultsCount == 0
+                  ? 'Nothing'
+                  : '$defaultsCount permission${defaultsCount == 1 ? '' : 's'}',
+              onTap: () => _open('Default permissions', _defaultsPage),
+            ),
+          ],
+        ),
         SettingsSection(title: 'About', children: [
           SettingsTile(
             icon: Icons.info_outline,
@@ -215,7 +231,7 @@ class _SettingsPageState extends State<SettingsPage> {
           ]),
       SettingsSection(
         title: 'Fingerprint',
-        footer: 'Before another device trusts this phone, check that it '
+        footer: 'Before another device gives this phone special rules, check that it '
             'shows exactly this fingerprint.',
         children: [
           Padding(
@@ -397,7 +413,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   List<Widget> _cameraPage(BuildContext context) => [
         SettingsSection(
-          footer: 'A trusted device you grant it can watch this phone\'s '
+          footer: 'A device your special or network rules allow can watch this phone\'s '
               'camera. Asks for the camera permission, and to confirm each '
               'viewer unless you allow that device to watch without asking.',
           children: [
@@ -415,7 +431,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   List<Widget> _screenPage(BuildContext context) => [
         SettingsSection(
-          footer: 'A trusted device you grant it can watch this screen. '
+          footer: 'A device your special or network rules allow can watch this screen. '
               'Android asks to confirm screen capture each time.',
           children: [
             SettingsSwitchTile(
@@ -431,7 +447,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   List<Widget> _controlPage(BuildContext context) => [
         SettingsSection(
-          footer: 'A trusted device you grant it can control this phone while '
+          footer: 'A device your special or network rules allow can control this phone while '
               'it watches your screen. Needs the uConnect accessibility '
               'service on.',
           children: [
@@ -473,8 +489,9 @@ class _SettingsPageState extends State<SettingsPage> {
       Padding(
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
         child: Text(
-          'What any device in your topic may do here until you trust it. '
-          'Trusted-only permissions are never offered to untrusted devices.',
+          'What a device may do here when no special or network rule covers '
+          'it, including devices whose identity is unknown. Sensitive '
+          'permissions (camera, screen, remote control) cannot be defaults.',
           style: TextStyle(fontSize: 13, color: UcColors.textSecondary),
         ),
       ),
@@ -496,33 +513,36 @@ class _SettingsPageState extends State<SettingsPage> {
     ];
   }
 
-  List<Widget> _trustedPage(BuildContext context) {
-    final trusted = state.store.trusted.values.toList();
+  List<Widget> _specialPage(BuildContext context) {
+    final special = state.store.special.values.toList()
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     return [
       SettingsSection(
-        footer: 'Trust a device from its page under Devices, after checking '
-            'its fingerprint. Its permissions are set there too.',
+        footer: 'Give a device special rules from its page under Devices, '
+            'after checking its fingerprint; change them there too. Removing '
+            'them leaves it to the network rules and defaults.',
         children: [
-          if (trusted.isEmpty)
+          if (special.isEmpty)
             SettingsTile(
               icon: Icons.verified_user_outlined,
               iconColor: UcColors.textDisabled,
-              title: 'No trusted devices yet',
+              title: 'No devices with special rules yet',
             ),
-          for (final t in trusted)
+          for (final t in special)
             SettingsTile(
               icon: Icons.verified_user,
               iconColor: UcColors.success,
               title: t.name.isEmpty ? 'Unnamed device' : t.name,
-              subtitle: fingerprintOfHex(t.keyHex),
+              subtitle: '${fingerprintOfHex(t.keyHex)}\n'
+                  '${t.permissions.length} permission${t.permissions.length == 1 ? '' : 's'}',
               trailing: TextButton(
                 onPressed: () async {
                   final ok = await _confirm(
                       context,
-                      'Stop trusting ${t.name.isEmpty ? 'this device' : t.name}?',
-                      'It loses every permission it was given here.');
+                      'Remove the special rules of ${t.name.isEmpty ? 'this device' : t.name}?',
+                      'Network rules and defaults apply to it again.');
                   if (ok) {
-                    await state.untrustDevice(t.keyHex);
+                    await state.removeSpecialRules(t.keyHex);
                     if (mounted) setState(() {});
                   }
                 },

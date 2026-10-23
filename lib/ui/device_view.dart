@@ -1,6 +1,6 @@
 // One device: its connection, identity and fingerprint, what it may do here
 // (the permission editor), and what it offers us -- the mobile DeviceView,
-// TrustDialog and PermissionEditor in one place.
+// special-rules dialog and permission editor in one place.
 
 import 'package:flutter/material.dart';
 
@@ -118,7 +118,7 @@ class DeviceView extends StatelessWidget {
                       [
                         stateName(p.stateCode),
                         if (p.hasHello && p.os.isNotEmpty) p.os,
-                        if (p.trusted) 'trusted',
+                        if (p.special) 'special rules',
                       ].join(' · '),
                       style: TextStyle(
                           fontSize: 13, color: UcColors.textSecondary),
@@ -197,44 +197,52 @@ class DeviceView extends StatelessWidget {
   Widget _identityCard(BuildContext context, PeerRecord p) {
     final (stateText, stateColor_) = switch (p.identityState) {
       'verified' => ('proven in this session', UcColors.success),
-      'invalid' => ('PROOF FAILED — do not trust', UcColors.error),
+      'invalid' => ('PROOF FAILED — give it nothing', UcColors.error),
       _ => ('not proven yet', UcColors.textSecondary),
     };
-    return _card('Identity', [
+    final rule = p.networkRule >= 0 && p.networkRule < state.networkRules.length
+        ? state.networkRules[p.networkRule]
+        : null;
+    final (rulesText, rulesColor) = switch (p.permissionSource) {
+      'device' => ('special rules', UcColors.success),
+      'rule' => ('network rule ${rule?.displayName ?? ''}', UcColors.accent),
+      _ => ('defaults', UcColors.textSecondary),
+    };
+    return _card('Identity & rules', [
       _row('Status', stateText, color: stateColor_),
       if (p.fingerprint.isNotEmpty) _row('Fingerprint', p.fingerprint),
-      if (p.trusted)
-        _row('Trust', 'trusted', color: UcColors.success)
-      else if (p.identityState == 'verified')
-        _row('Trust', 'not trusted yet'),
+      if (p.address.isNotEmpty) _row('Address', p.address),
+      _row('Rules', rulesText, color: rulesColor),
       const SizedBox(height: 8),
-      if (p.identityState == 'verified' && !p.trusted)
+      if (p.identityState == 'verified' && !p.special)
         FilledButton(
-          onPressed: () => _showTrustDialog(context, p),
-          child: const Text('Trust this device...'),
+          onPressed: () => _showSpecialRulesDialog(context, p),
+          child: const Text('Add special rules...'),
         ),
-      if (p.trusted)
+      if (p.special)
         OutlinedButton(
           onPressed: () async {
-            await state.untrustDevice(p.identityKey);
+            await state.removeSpecialRules(p.identityKey);
           },
-          child: const Text('Withdraw trust'),
+          child: const Text('Remove special rules'),
         ),
     ]);
   }
 
-  Future<void> _showTrustDialog(BuildContext context, PeerRecord p) async {
+  // Special rules pin the device's key, so this is where a person compares
+  // fingerprints before giving it permissions of its own.
+  Future<void> _showSpecialRulesDialog(BuildContext context, PeerRecord p) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Trust this device?'),
+        title: const Text('Add special rules?'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               'Check that "${p.displayName}" shows exactly this fingerprint '
-              'under its own identity before trusting it:',
+              'under its own identity first:',
               style: TextStyle(color: UcColors.textSecondary),
             ),
             const SizedBox(height: 12),
@@ -257,8 +265,9 @@ class DeviceView extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              'A trusted device can be granted more: screen viewing, remote '
-              'control, writing to your files.',
+              'Its special rules start from what it may do now and come '
+              'before network rules and defaults. They may include sensitive '
+              'permissions: screen, camera, remote control.',
               style: TextStyle(color: UcColors.textSecondary, fontSize: 12),
             ),
           ],
@@ -270,27 +279,24 @@ class DeviceView extends StatelessWidget {
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('The fingerprints match — trust'),
+            child: const Text('Fingerprints match — add'),
           ),
         ],
       ),
     );
     if (ok == true) {
-      await state.trustDevice(p.identityKey, p.displayName);
+      await state.addSpecialRules(p.identityKey, p.displayName);
     }
   }
 
   Widget _permissionsCard(BuildContext context, PeerRecord p) {
-    final trustedEntry = state.store.trusted[p.identityKey];
-    final editable = trustedEntry != null;
-    final current = editable
-        ? trustedEntry.permissions
-        : state.session.permissionsFor(p.devId);
+    final entry = state.store.special[p.identityKey];
+    final editable = entry != null;
+    final current = editable ? entry.permissions : p.permissions.toSet();
     final rows = <Widget>[];
     String? service;
     for (final info in permissionTable) {
       if (!info.available) continue;
-      if (info.trustedOnly && !editable) continue;
       if (info.service != service) {
         service = info.service;
         rows.add(Padding(
@@ -314,30 +320,34 @@ class DeviceView extends StatelessWidget {
         onChanged: !editable
             ? null
             : (on) async {
-                final next = {...trustedEntry.permissions};
+                final next = <String>{...entry.permissions};
                 if (on) {
                   next.add(info.id);
                 } else {
                   next.remove(info.id);
                 }
-                await state.setTrustedPermissions(p.identityKey, next);
+                await state.setSpecialPermissions(p.identityKey, entry.name, next);
               },
       ));
     }
-    return _card(
-      editable ? 'What it may do here' : 'What it may do here (defaults)',
-      [
-        if (!editable)
-          Padding(
-            padding: EdgeInsets.only(bottom: 6),
-            child: Text(
-              'Trust the device to give it permissions of its own.',
-              style: TextStyle(fontSize: 12, color: UcColors.textSecondary),
-            ),
-          ),
-        ...rows,
-      ],
-    );
+    final rule = p.networkRule >= 0 && p.networkRule < state.networkRules.length
+        ? state.networkRules[p.networkRule]
+        : null;
+    final note = switch (p.permissionSource) {
+      'device' => 'Its special rules. Changes apply right away.',
+      'rule' => 'From the network rule ${rule?.displayName ?? ''}, because it '
+          'connects from ${p.address}. Add special rules to give it its own.',
+      _ => 'Your default permissions, which any device with the invite link '
+          'gets. Add special rules to give it its own.',
+    };
+    return _card('What it may do here', [
+      Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Text(note,
+            style: TextStyle(fontSize: 12, color: UcColors.textSecondary)),
+      ),
+      ...rows,
+    ]);
   }
 
   Widget _servicesCard(BuildContext context, PeerRecord p) {

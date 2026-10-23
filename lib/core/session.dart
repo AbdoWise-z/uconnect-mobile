@@ -6,12 +6,13 @@
 // desktop's worker-thread poll does (publish, lookup, reconnect).
 
 import 'dart:async';
-import 'dart:io' show Platform;
+import 'dart:io' show InternetAddress, Platform;
 import 'dart:typed_data';
 
 import '../uconnect/uconnect.dart';
 import 'identity.dart';
 import 'permissions.dart';
+import 'network_rules.dart';
 import 'wire.dart';
 
 enum SessionStatus { offline, connecting, online, reconnecting, error }
@@ -38,8 +39,14 @@ class PeerRecord {
   String identityState = 'pending'; // "pending" | "verified" | "invalid"
   String identityKey = ''; // hex public key, once verified
   String fingerprint = '';
-  bool trusted = false;
+  bool special = false; // this device set special rules for it
   List<String> permissions = const []; // what this device grants it
+  // Where they come from: "device" (its special rules), "rule" (a network
+  // rule, index in networkRule) or "default".
+  String permissionSource = 'default';
+  int networkRule = -1;
+  // Where its direct connection comes from; empty when relayed or unknown.
+  String address = '';
   List<String> grantedToMe = const []; // what it says it grants this device
 
   // Internals, mirroring the desktop session's PeerInfo.
@@ -70,15 +77,36 @@ String goneName(int gone) => switch (gone) {
       _ => 'unspecified',
     };
 
-/// What this device lets others do. Owned by the app, which pushes a copy to
-/// the session whenever it changes.
+/// What this device lets others do, the first that applies:
+///   1. its special rules: permissions set for that device (by public key);
+///   2. the first of this topic's network rules its address matches;
+///   3. the defaults, which never include sensitive permissions (camera,
+///      screen, control...), as any holder of the invite link gets them.
+/// 1 and 2 need the device to have proven its identity. Owned by the app,
+/// which pushes a copy to the session whenever it changes.
 class AccessPolicy {
-  AccessPolicy({Set<String>? defaults, Map<String, Set<String>>? trusted})
+  AccessPolicy(
+      {Set<String>? defaults,
+      Map<String, Set<String>>? special,
+      List<NetworkRule>? rules,
+      List<InternetAddress>? localAddresses})
       : defaults = defaults ?? {},
-        trusted = trusted ?? {};
+        special = special ?? {},
+        rules = rules ?? const [],
+        localAddresses = localAddresses ?? const [];
 
-  Set<String> defaults; // every device that is not trusted
-  Map<String, Set<String>> trusted; // public key (hex) -> its own permissions
+  Set<String> defaults;
+  Map<String, Set<String>> special; // public key (hex) -> its special rules
+  List<NetworkRule> rules; // this topic's network rules, first match wins
+  List<InternetAddress> localAddresses; // this device's, for the "m" parts
+}
+
+/// A device's answer to [Session.requestNetworkRules]: its rules, or why not.
+class NetworkRulesOffer {
+  NetworkRulesOffer(this.dev, this.rules, this.error);
+  final String dev;
+  final List<NetworkRule> rules;
+  final String error; // empty on success
 }
 
 class NodeSnapshot {
@@ -228,20 +256,56 @@ class Session {
     _refreshRecords();
   }
 
-  Set<String> permissionsFor(String dev) {
+  Set<String> permissionsFor(String dev) => resolvePermissions(dev).$1;
+
+  /// What [dev] may do here and where that comes from: "device", "rule" or
+  /// "default" (see [AccessPolicy]).
+  (Set<String>, String) resolvePermissions(String dev) {
     final p = peers[dev];
     if (p != null && p.identityState == 'verified') {
-      final trusted = _policy.trusted[p.identityKey];
-      if (trusted != null) return normalizePermissions(trusted);
+      final special = _policy.special[p.identityKey];
+      if (special != null) return (normalizePermissions(special), 'device');
+      final rule = networkRuleFor(dev);
+      if (rule >= 0) {
+        return (normalizePermissions(_policy.rules[rule].permissions), 'rule');
+      }
     }
-    return permissionsForUntrusted(normalizePermissions(_policy.defaults));
+    return (withoutSensitive(normalizePermissions(_policy.defaults)), 'default');
   }
 
-  bool isTrusted(String dev) {
-    final p = peers[dev];
-    return p != null &&
-        p.identityState == 'verified' &&
-        _policy.trusted.containsKey(p.identityKey);
+  /// The peer's direct-connection address, or null when relayed or unknown.
+  InternetAddress? peerAddress(String dev) {
+    final node = _node;
+    if (node == null || _topic.isEmpty) return null;
+    return node.peerAddress(_topic, dev);
+  }
+
+  /// The first network rule the peer's address matches, or -1.
+  int networkRuleFor(String dev) {
+    if (_policy.rules.isEmpty) return -1;
+    final a = peerAddress(dev);
+    return a == null ? -1 : firstMatchingRule(_policy.rules, a, _policy.localAddresses);
+  }
+
+  final _rulesOffers = StreamController<NetworkRulesOffer>.broadcast();
+
+  /// Answers to [requestNetworkRules].
+  Stream<NetworkRulesOffer> get networkRulesOffers => _rulesOffers.stream;
+
+  /// Asks a device for its network rules on this topic (rules.get).
+  void requestNetworkRules(String dev) => sendControl(dev, {'t': 'rules.get'});
+
+  void _onRulesGet(String dev) {
+    // Only a proven device with special rules here, or one a network rule
+    // covers, may copy them -- not one on the defaults alone.
+    final allowed = resolvePermissions(dev).$2 != 'default';
+    sendControl(
+        dev,
+        allowed
+            ? {'t': 'rules.list', 'rules': networkRulesToJson(_policy.rules)}
+            : {'t': 'rules.err', 'code': 'forbidden'});
+    log('Peer ${shortId(dev)} asked for the network rules: '
+        '${allowed ? 'sent' : 'refused: it has no rules here'}');
   }
 
   Future<void> start(SessionOptions options) async {
@@ -434,9 +498,13 @@ class Session {
         p.bytesSent = link.bytesSent;
         p.bytesReceived = link.bytesReceived;
       }
-      p.trusted =
-          p.identityState == 'verified' && _policy.trusted.containsKey(p.identityKey);
-      p.permissions = permissionsFor(entry.key).toList()..sort();
+      p.special = p.identityState == 'verified' &&
+          _policy.special.containsKey(p.identityKey);
+      p.address = peerAddress(entry.key)?.address ?? '';
+      p.networkRule = networkRuleFor(entry.key);
+      final (perms, source) = resolvePermissions(entry.key);
+      p.permissions = perms.toList()..sort();
+      p.permissionSource = source;
     }
     _updateSnapshot(node);
     _notify();
@@ -540,6 +608,17 @@ class Session {
       }
       if (t == 'perm.granted') {
         _onGrants(dev, msg);
+        return;
+      }
+      if (t == 'rules.get') {
+        _onRulesGet(dev);
+        return;
+      }
+      if (t == 'rules.list' || t == 'rules.err') {
+        _rulesOffers.add(NetworkRulesOffer(
+            dev,
+            t == 'rules.list' ? networkRulesFromJson(msg['rules']) : const [],
+            t == 'rules.err' ? (msg['code'] is String ? msg['code'] as String : 'error') : ''));
         return;
       }
       for (final h in _controlHandlers) {

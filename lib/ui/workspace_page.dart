@@ -242,7 +242,7 @@ class _DevicesTab extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontWeight: FontWeight.w500)),
                 ),
-                if (p.trusted) ...[
+                if (p.special) ...[
                   const SizedBox(width: 6),
                   Icon(Icons.verified_user,
                       size: 14, color: UcColors.success),

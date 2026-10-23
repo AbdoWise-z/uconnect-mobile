@@ -342,6 +342,10 @@ class UcBindings {
             Bool Function(Pointer<NativeNode>, UcTopicId, UcDevId, Pointer<UcLinkInfo>),
             bool Function(Pointer<NativeNode>, UcTopicId, UcDevId,
                 Pointer<UcLinkInfo>)>('uconnect_topic_link'),
+        topicPeerAddress = lib.lookupFunction<
+            Bool Function(Pointer<NativeNode>, UcTopicId, UcDevId, Pointer<UcEndpoint>),
+            bool Function(Pointer<NativeNode>, UcTopicId, UcDevId,
+                Pointer<UcEndpoint>)>('uconnect_topic_peer_address'),
         topicSend = lib.lookupFunction<
             Bool Function(Pointer<NativeNode>, UcTopicId, UcDevId, Pointer<Uint8>, Size),
             bool Function(Pointer<NativeNode>, UcTopicId, UcDevId, Pointer<Uint8>,
@@ -452,6 +456,9 @@ class UcBindings {
   final int Function(Pointer<NativeNode>, UcTopicId, UcDevId) topicState;
   final bool Function(Pointer<NativeNode>, UcTopicId, UcDevId, Pointer<UcLinkInfo>)
       topicLink;
+  // Where the peer's direct connection comes from; false when relayed or none.
+  final bool Function(Pointer<NativeNode>, UcTopicId, UcDevId, Pointer<UcEndpoint>)
+      topicPeerAddress;
 
   final bool Function(Pointer<NativeNode>, UcTopicId, UcDevId, Pointer<Uint8>, int)
       topicSend;

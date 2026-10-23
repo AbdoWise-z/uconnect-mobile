@@ -296,7 +296,7 @@ class ScreenHost {
       _setControl(dev, _intf(msg, 'request'), msg['on'] == true);
 
   // Grants or drops remote control for the watching peer, with the same
-  // trust/permission/consent gate as screen viewing (7.5).
+  // rules/permission/consent gate as screen viewing (7.5).
   Future<void> _setControl(String dev, int request, bool on) async {
     void answer(bool granted, [String? detail]) => session.sendControl(dev, {
           't': 'scr.controlled',

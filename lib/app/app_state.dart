@@ -9,6 +9,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../core/identity.dart';
+import '../core/network_rules.dart';
 import '../core/permissions.dart';
 import '../core/screen/remote_input.dart';
 import '../core/screen/screen_capture.dart';
@@ -111,6 +112,9 @@ class AppState extends ChangeNotifier {
       unawaited(connect());
     }
     unawaited(_inviteLinks.start());
+    unawaited(_refreshLocalAddresses());
+    _addressTimer = Timer.periodic(
+        const Duration(seconds: 15), (_) => unawaited(_refreshLocalAddresses()));
   }
 
   // --- invite links (QR codes / uconn:// links opening the app) --------------
@@ -214,10 +218,12 @@ class AppState extends ChangeNotifier {
     ));
     session.setAccessPolicy(AccessPolicy(
       defaults: normalizePermissions(store.defaultPermissions),
-      trusted: {
-        for (final t in store.trusted.values)
+      special: {
+        for (final t in store.special.values)
           t.keyHex: normalizePermissions(t.permissions)
       },
+      rules: networkRules,
+      localAddresses: localAddresses,
     ));
   }
 
@@ -372,36 +378,79 @@ class AppState extends ChangeNotifier {
     return ok ?? false;
   }
 
-  // --- trust and permissions -------------------------------------------------
+  // --- permissions: special rules, network rules, defaults ---------------------
 
-  Future<void> trustDevice(String keyHex, String name) async {
-    store.trusted.putIfAbsent(
-        keyHex,
-        () => TrustedDevice(
-            keyHex, name, normalizePermissions(store.defaultPermissions)));
+  // What a device with this key may do here right now (a network rule's or
+  // the defaults), as shown for it: where its special rules start from.
+  Set<String> _currentPermissionsOf(String keyHex) {
+    for (final p in session.peers.values) {
+      if (p.identityKey == keyHex) return p.permissions.toSet();
+    }
+    return withoutSensitive(normalizePermissions(store.defaultPermissions));
+  }
+
+  /// Gives a device special rules, starting from what it may do now.
+  Future<void> addSpecialRules(String keyHex, String name) async {
+    store.special.putIfAbsent(
+        keyHex, () => SpecialRules(keyHex, name, _currentPermissionsOf(keyHex)));
     await store.save();
     _applyLocalConfig();
   }
 
-  Future<void> untrustDevice(String keyHex) async {
-    store.trusted.remove(keyHex);
+  /// Drops a device's special rules: network rules and defaults apply again.
+  Future<void> removeSpecialRules(String keyHex) async {
+    store.special.remove(keyHex);
     await store.save();
     _applyLocalConfig();
   }
 
-  Future<void> setTrustedPermissions(String keyHex, Set<String> perms) async {
-    final t = store.trusted[keyHex];
-    if (t == null) return;
+  /// Sets a device's special rules (adding them if it had none).
+  Future<void> setSpecialPermissions(String keyHex, String name, Set<String> perms) async {
+    final t = store.special
+        .putIfAbsent(keyHex, () => SpecialRules(keyHex, name, <String>{}));
     t.permissions = perms;
     await store.save();
     _applyLocalConfig();
   }
 
   Future<void> setDefaultPermissions(Set<String> perms) async {
-    store.defaultPermissions =
-        perms..removeWhere(isTrustedOnlyPermission);
+    store.defaultPermissions = withoutSensitive(perms);
     await store.save();
     _applyLocalConfig();
+  }
+
+  /// The joined topic's id, which network rules are kept under.
+  String get topicKey => TopicCreds.parse(store.topicUri)?.idHex ?? '';
+
+  /// This topic's network rules, first match wins.
+  List<NetworkRule> get networkRules => store.networkRules[topicKey] ?? const [];
+
+  Future<void> setNetworkRules(List<NetworkRule> rules) async {
+    final key = topicKey;
+    if (key.isEmpty) return;
+    store.networkRules[key] = rules.take(maxNetworkRules).toList();
+    await store.save();
+    _applyLocalConfig();
+  }
+
+  /// Asks a connected device for its network rules on this topic; its answer
+  /// comes on [networkRulesOffers].
+  void requestNetworkRules(String dev) => session.requestNetworkRules(dev);
+  Stream<NetworkRulesOffer> get networkRulesOffers => session.networkRulesOffers;
+
+  /// This device's IPv4 addresses, for the rules' "m" parts; refreshed now
+  /// and then, as they change with the network.
+  List<InternetAddress> localAddresses = const [];
+  Timer? _addressTimer;
+
+  Future<void> _refreshLocalAddresses() async {
+    final now = await localIpv4Addresses();
+    final same = now.length == localAddresses.length &&
+        now.every((a) => localAddresses.any((b) => b.address == a.address));
+    if (same) return;
+    localAddresses = now;
+    _applyLocalConfig();
+    notifyListeners();
   }
 
   // --- shares ------------------------------------------------------------------
@@ -423,6 +472,7 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
+    _addressTimer?.cancel();
     for (final s in _subs) {
       unawaited(s.cancel());
     }

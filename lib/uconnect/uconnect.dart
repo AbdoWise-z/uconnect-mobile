@@ -10,6 +10,7 @@
 
 import 'dart:async';
 import 'dart:ffi';
+import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
@@ -574,6 +575,24 @@ class UcNode {
       final r = out.ref;
       return LinkInfo(r.relayed, r.messagesSent, r.messagesReceived,
           r.bytesSent, r.bytesReceived);
+    } finally {
+      calloc.free(tid);
+      calloc.free(did);
+      calloc.free(out);
+    }
+  }
+
+  /// The address this device sees the peer at over its direct connection,
+  /// or null when there is no live direct session (none, or relayed).
+  InternetAddress? peerAddress(String topicHex, String devHex) {
+    final tid = _tid(topicHex);
+    final did = _did(devHex);
+    final out = calloc<UcEndpoint>();
+    try {
+      if (!ucBindings.topicPeerAddress(_node, tid.ref, did.ref, out)) return null;
+      final e = out.ref;
+      final raw = _arrayLoad(e.addr, e.family == 4 ? 4 : 16);
+      return InternetAddress.fromRawAddress(Uint8List.fromList(raw));
     } finally {
       calloc.free(tid);
       calloc.free(did);

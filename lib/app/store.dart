@@ -1,10 +1,13 @@
 // Persistent app state, one JSON file in the app's private storage: the
 // server, the joined topic, this device's name and offered services, the
-// permission defaults, every trusted device, and the shared folders. The
+// permission defaults, special rules per device, network rules per topic,
+// and the shared folders. The
 // identity seed lives in its own file (identity.dart), not here.
 
 import 'dart:convert';
 import 'dart:io';
+
+import '../core/network_rules.dart';
 
 import '../core/storage/storage_offerer.dart';
 
@@ -27,10 +30,13 @@ class RelayMode {
   ];
 }
 
-class TrustedDevice {
-  TrustedDevice(this.keyHex, this.name, this.permissions);
+/// Special rules: permissions set for one device, by the public key it proves
+/// (see Session.resolvePermissions). They come before network rules and the
+/// defaults.
+class SpecialRules {
+  SpecialRules(this.keyHex, this.name, this.permissions);
   final String keyHex;
-  String name; // what it called itself when trusted; a label, nothing more
+  String name; // what it called itself when they were added; a label only
   Set<String> permissions;
 
   Map<String, Object?> toJson() => {
@@ -39,11 +45,11 @@ class TrustedDevice {
         'perms': permissions.toList()..sort(),
       };
 
-  static TrustedDevice? fromJson(Object? v) {
+  static SpecialRules? fromJson(Object? v) {
     if (v is! Map) return null;
     final key = v['key'];
     if (key is! String) return null;
-    return TrustedDevice(
+    return SpecialRules(
       key,
       v['name'] is String ? v['name'] as String : '',
       {
@@ -81,7 +87,9 @@ class AppStore {
   int cameraMaxWidth = 1280;
   int cameraMaxFps = 30;
   Set<String> defaultPermissions = {};
-  final trusted = <String, TrustedDevice>{}; // key hex -> device
+  final special = <String, SpecialRules>{}; // key hex -> its special rules
+  // Network rules, per topic id (hex): first match wins (core/network_rules).
+  final networkRules = <String, List<NetworkRule>>{};
   List<SharedFolder> shares = [];
   // Colour scheme id (see ui/theme.dart): system, dark, darker, light, colorful.
   String colorScheme = 'dark';
@@ -130,11 +138,21 @@ class AppStore {
         for (final p in decoded['defaults'] as List)
           if (p is String) p
     };
-    trusted.clear();
-    if (decoded['trusted'] is List) {
-      for (final t in decoded['trusted'] as List) {
-        final d = TrustedDevice.fromJson(t);
-        if (d != null) trusted[d.keyHex] = d;
+    special.clear();
+    // Before special rules there was trust; a trusted device's own permissions
+    // are exactly its special rules.
+    for (final list in [decoded['trusted'], decoded['special']]) {
+      if (list is! List) continue;
+      for (final t in list) {
+        final d = SpecialRules.fromJson(t);
+        if (d != null) special[d.keyHex] = d;
+      }
+    }
+    networkRules.clear();
+    final rules = decoded['networkRules'];
+    if (rules is Map) {
+      for (final e in rules.entries) {
+        if (e.key is String) networkRules[e.key as String] = networkRulesFromJson(e.value);
       }
     }
     shares = [
@@ -165,7 +183,11 @@ class AppStore {
       'screenMaxFps': screenMaxFps,
       'colorScheme': colorScheme,
       'defaults': defaultPermissions.toList()..sort(),
-      'trusted': [for (final t in trusted.values) t.toJson()],
+      'special': [for (final t in special.values) t.toJson()],
+      'networkRules': {
+        for (final e in networkRules.entries)
+          if (e.value.isNotEmpty) e.key: networkRulesToJson(e.value)
+      },
       'shares': [
         for (final s in shares)
           {'name': s.name, 'path': s.path, 'readOnly': s.readOnly}
