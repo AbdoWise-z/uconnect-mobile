@@ -40,6 +40,15 @@ class _NetworkRulesPageState extends State<NetworkRulesPage> {
 
   String _nameOf(String dev) => state.session.peers[dev]?.displayName ?? shortId(dev);
 
+  // Names can be copied: a device is told apart by its fingerprint, whose
+  // start is shown next to its name ("not proven" until it proved it).
+  String _fingerprintOf(PeerRecord? p) =>
+      p != null && p.identityState == 'verified' ? p.fingerprint : '';
+  String _shortFingerprint(PeerRecord? p) {
+    final f = _fingerprintOf(p);
+    return f.isEmpty ? 'not proven' : f.substring(0, 9);
+  }
+
   Future<void> _onOffer(NetworkRulesOffer offer) async {
     if (!mounted) return;
     final name = _nameOf(offer.dev);
@@ -59,6 +68,24 @@ class _NetworkRulesPageState extends State<NetworkRulesPage> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Builder(builder: (context) {
+                final fp = _fingerprintOf(state.session.peers[offer.dev]);
+                return Row(children: [
+                  Icon(fp.isEmpty ? Icons.warning_amber : Icons.fingerprint,
+                      size: 18,
+                      color: fp.isEmpty ? UcColors.error : UcColors.textSecondary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                        fp.isEmpty ? 'This device has not proved its identity.' : fp,
+                        style: TextStyle(
+                            color: fp.isEmpty ? UcColors.error : UcColors.text,
+                            fontFamily: fp.isEmpty ? null : 'monospace',
+                            fontSize: 13)),
+                  ),
+                ]);
+              }),
+              const SizedBox(height: 10),
               Text(
                 offer.rules.isEmpty
                     ? 'It has no network rules on this topic.'
@@ -211,8 +238,10 @@ class _NetworkRulesPageState extends State<NetworkRulesPage> {
                     SettingsTile(
                       icon: Icons.download_outlined,
                       title: 'Request rules from ${p.displayName}',
+                      subtitle: _shortFingerprint(p),
                       onTap: () {
-                        setState(() => _copyStatus = 'Asking ${p.displayName}…');
+                        setState(() => _copyStatus =
+                            'Asking ${p.displayName} (${_shortFingerprint(p)})…');
                         state.requestNetworkRules(p.devId);
                       },
                     ),
