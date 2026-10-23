@@ -35,13 +35,15 @@ class DeviceView extends StatelessWidget {
         }
         return Scaffold(
           appBar: AppBar(title: Text(p.displayName)),
+          backgroundColor: UcColors.canvas,
           body: ListView(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+            padding: const EdgeInsets.only(bottom: 28),
             children: [
+              _header(p),
+              _servicesCard(context, p),
               _connectionCard(context, p),
               _identityCard(context, p),
               if (p.identityState == 'verified') _permissionsCard(context, p),
-              _servicesCard(context, p),
             ],
           ),
         );
@@ -69,28 +71,105 @@ class DeviceView extends StatelessWidget {
         ),
       );
 
+  // The device's icon, name and connection state at the top of the page.
+  Widget _header(PeerRecord p) {
+    final os = p.os.toLowerCase();
+    final phone = os.contains('android') ||
+        os.contains('ios') ||
+        os.contains('iphone') ||
+        os.contains('ipad');
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+      child: Row(
+        children: [
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              color: UcColors.accent,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Icon(phone ? Icons.smartphone : Icons.computer,
+                color: Colors.white, size: 30),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(p.displayName,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w600,
+                        color: UcColors.text)),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                          color: stateColor(p.stateCode),
+                          shape: BoxShape.circle),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      [
+                        stateName(p.stateCode),
+                        if (p.hasHello && p.os.isNotEmpty) p.os,
+                        if (p.trusted) 'trusted',
+                      ].join(' · '),
+                      style: TextStyle(
+                          fontSize: 13, color: UcColors.textSecondary),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // A titled panel, matching the settings sections.
   Widget _card(String title, List<Widget> children, {Widget? trailing}) =>
-      Card(
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(left: 4, bottom: 6),
+              child: Row(
                 children: [
                   Expanded(
-                    child: Text(title,
+                    child: Text(title.toUpperCase(),
                         style: TextStyle(
+                            fontSize: 11.5,
+                            letterSpacing: 0.8,
                             fontWeight: FontWeight.w600,
-                            color: UcColors.text)),
+                            color: UcColors.textSecondary)),
                   ),
                   if (trailing != null) trailing,
                 ],
               ),
-              const SizedBox(height: 8),
-              ...children,
-            ],
-          ),
+            ),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: UcColors.panel,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: UcColors.border),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: children,
+              ),
+            ),
+          ],
         ),
       );
 

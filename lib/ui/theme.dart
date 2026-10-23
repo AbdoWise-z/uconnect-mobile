@@ -200,6 +200,24 @@ const ucSchemes = <UcScheme>[
   UcScheme('colorful', 'Colorful'),
 ];
 
+/// A few colours of a scheme, for drawing its preview swatch in Settings.
+class UcSchemePreview {
+  const UcSchemePreview(this.canvas, this.panel, this.accent, this.text,
+      this.textSecondary, this.border);
+  final Color canvas;
+  final Color panel;
+  final Color accent;
+  final Color text;
+  final Color textSecondary;
+  final Color border;
+}
+
+UcSchemePreview ucSchemePreview(String id, Brightness platform) {
+  final p = _paletteFor(id, platform);
+  return UcSchemePreview(
+      p.canvas, p.panel, p.accent, p.text, p.textSecondary, p.border);
+}
+
 _Palette _paletteFor(String id, Brightness platform) {
   switch (id) {
     case 'system':
