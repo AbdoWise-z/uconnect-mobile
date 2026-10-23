@@ -123,7 +123,7 @@ class _StorageViewState extends State<StorageView> {
           children: [
             Text(widget.devName, style: const TextStyle(fontSize: 15)),
             Text(_path,
-                style: const TextStyle(
+                style: TextStyle(
                     fontSize: 12, color: UcColors.textSecondary)),
           ],
         ),
@@ -173,7 +173,7 @@ class _StorageViewState extends State<StorageView> {
             children: [
               Text(_error,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: UcColors.error)),
+                  style: TextStyle(color: UcColors.error)),
               const SizedBox(height: 12),
               OutlinedButton(
                   onPressed: () => _open(_path), child: const Text('Retry')),
@@ -185,7 +185,7 @@ class _StorageViewState extends State<StorageView> {
     final listing = _listing;
     if (listing == null) return const SizedBox.shrink();
     if (listing.entries.isEmpty) {
-      return const Center(
+      return Center(
         child: Text('Empty folder',
             style: TextStyle(color: UcColors.textSecondary)),
       );
@@ -214,13 +214,13 @@ class _StorageViewState extends State<StorageView> {
             title: Text(e.name, overflow: TextOverflow.ellipsis),
             subtitle: e.dir
                 ? (e.readOnly == true
-                    ? const Text('read-only',
+                    ? Text('read-only',
                         style: TextStyle(
                             fontSize: 11, color: UcColors.textSecondary))
                     : null)
                 : Text(
                     '${_bytes(e.size)}${e.mtime > 0 ? ' · ${_date(e.mtime)}' : ''}',
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 11, color: UcColors.textSecondary)),
             onTap: e.dir ? () => _open(childPath) : null,
             trailing: PopupMenuButton<String>(

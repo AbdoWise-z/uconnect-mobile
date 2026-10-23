@@ -35,6 +35,7 @@ class _SettingsPageState extends State<SettingsPage> {
       children: [
         _deviceCard(context),
         _topicCard(context),
+        _appearanceCard(context),
         _storageCard(context),
         _cameraCard(context),
         _screenCard(context),
@@ -53,13 +54,44 @@ class _SettingsPageState extends State<SettingsPage> {
           initiallyExpanded: initiallyExpanded,
           children: children);
 
+  // Colour-scheme picker. Switching restyles the whole app live (main.dart
+  // rebuilds the theme from the stored scheme).
+  Widget _appearanceCard(BuildContext context) {
+    return _card('Appearance', [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Color scheme',
+                style: TextStyle(fontSize: 11, color: UcColors.textSecondary)),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final s in ucSchemes)
+                  ChoiceChip(
+                    label: Text(s.label),
+                    selected: state.store.colorScheme == s.id,
+                    onSelected: (_) =>
+                        state.saveSettings(colorScheme: s.id),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    ]);
+  }
+
   Widget _deviceCard(BuildContext context) {
     return _card('This device', [
       ListTile(
         contentPadding: EdgeInsets.zero,
         title: const Text('Name', style: TextStyle(fontSize: 13)),
         subtitle: Text(state.store.deviceName,
-            style: const TextStyle(color: UcColors.textSecondary)),
+            style: TextStyle(color: UcColors.textSecondary)),
         trailing: const Icon(Icons.edit_outlined, size: 18),
         onTap: () async {
           final name = await _ask(context, 'Device name',
@@ -70,7 +102,7 @@ class _SettingsPageState extends State<SettingsPage> {
         },
       ),
       const SizedBox(height: 4),
-      const Text('Fingerprint — other devices check this before trusting:',
+      Text('Fingerprint — other devices check this before trusting:',
           style: TextStyle(fontSize: 12, color: UcColors.textSecondary)),
       const SizedBox(height: 6),
       Container(
@@ -84,7 +116,7 @@ class _SettingsPageState extends State<SettingsPage> {
         child: Text(
           state.identity?.fingerprint ?? '',
           textAlign: TextAlign.center,
-          style: const TextStyle(
+          style: TextStyle(
               fontFamily: 'monospace', fontSize: 14, color: UcColors.text),
         ),
       ),
@@ -101,7 +133,7 @@ class _SettingsPageState extends State<SettingsPage> {
               state.store.server.isEmpty
                   ? 'No server set'
                   : 'Server: ${state.store.server}',
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 13, color: UcColors.textSecondary),
             ),
           ),
@@ -135,7 +167,7 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ),
         const SizedBox(height: 8),
-        const Center(
+        Center(
           child: Text(
             'Send the invite link privately to your other devices.',
             style: TextStyle(fontSize: 12, color: UcColors.textSecondary),
@@ -197,7 +229,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             const SizedBox(height: 6),
             Text(RelayMode.blurbs[state.store.relayMode],
-                style: const TextStyle(
+                style: TextStyle(
                     fontSize: 11, color: UcColors.textSecondary)),
           ],
         ),
@@ -245,7 +277,7 @@ class _SettingsPageState extends State<SettingsPage> {
         DropdownButton<int>(
           value: options.contains(value) ? value : options[1],
           isDense: true,
-          style: const TextStyle(fontSize: 12, color: UcColors.text),
+          style: TextStyle(fontSize: 12, color: UcColors.text),
           dropdownColor: UcColors.panel,
           underline: const SizedBox.shrink(),
           items: [
@@ -258,13 +290,13 @@ class _SettingsPageState extends State<SettingsPage> {
         );
 
     return [
-      const Padding(
+      Padding(
         padding: EdgeInsets.only(left: 16, top: 2),
         child: Text('Cameras to offer',
             style: TextStyle(fontSize: 11, color: UcColors.textSecondary)),
       ),
       if (cams.isEmpty)
-        const Padding(
+        Padding(
           padding: EdgeInsets.only(left: 16, top: 4, bottom: 4),
           child: Text('No cameras found on this device.',
               style: TextStyle(fontSize: 11, color: UcColors.textSecondary)),
@@ -305,7 +337,7 @@ class _SettingsPageState extends State<SettingsPage> {
         contentPadding: EdgeInsets.zero,
         title: Text(title, style: const TextStyle(fontSize: 13)),
         subtitle: Text(subtitle,
-            style: const TextStyle(fontSize: 11, color: UcColors.textSecondary)),
+            style: TextStyle(fontSize: 11, color: UcColors.textSecondary)),
         value: value,
         onChanged: onChanged,
       );
@@ -319,9 +351,9 @@ class _SettingsPageState extends State<SettingsPage> {
           (on) => state.saveSettings(offerStorage: on)),
       ListTile(
         contentPadding: EdgeInsets.zero,
-        leading: const Icon(Icons.folder_outlined, color: UcColors.warning),
+        leading: Icon(Icons.folder_outlined, color: UcColors.warning),
         title: const Text('Shared folder', style: TextStyle(fontSize: 13)),
-        subtitle: const Text(
+        subtitle: Text(
           'Files you add here are what other devices see.',
           style: TextStyle(fontSize: 11, color: UcColors.textSecondary),
         ),
@@ -369,7 +401,7 @@ class _SettingsPageState extends State<SettingsPage> {
           padding: const EdgeInsets.only(top: 4, bottom: 4),
           child: Row(
             children: [
-              const Expanded(
+              Expanded(
                 child: Text(
                   'The remote-control service is off. Turn on "uConnect remote '
                   'control" under Accessibility to allow control.',
@@ -413,7 +445,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget _defaultsCard(BuildContext context) {
     final defaults = state.store.defaultPermissions;
     return _card('Devices that are not trusted may', [
-      const Text(
+      Text(
         'Applies to every device in the topic until you trust it. '
         'Trusted-only grants are never available here.',
         style: TextStyle(fontSize: 12, color: UcColors.textSecondary),
@@ -427,7 +459,7 @@ class _SettingsPageState extends State<SettingsPage> {
             title: Text('${_serviceLabel(info.service)}: ${info.label}',
                 style: const TextStyle(fontSize: 13)),
             subtitle: Text(info.description,
-                style: const TextStyle(
+                style: TextStyle(
                     fontSize: 11, color: UcColors.textSecondary)),
             value: defaults.contains(info.id),
             onChanged: (on) async {
@@ -448,17 +480,17 @@ class _SettingsPageState extends State<SettingsPage> {
     final trusted = state.store.trusted.values.toList();
     return _card('Trusted devices', [
       if (trusted.isEmpty)
-        const Text('None yet. Trust a device from its page under Devices.',
+        Text('None yet. Trust a device from its page under Devices.',
             style: TextStyle(fontSize: 12, color: UcColors.textSecondary)),
       for (final t in trusted)
         ListTile(
           contentPadding: EdgeInsets.zero,
           leading:
-              const Icon(Icons.verified_user, color: UcColors.success, size: 20),
+              Icon(Icons.verified_user, color: UcColors.success, size: 20),
           title: Text(t.name.isEmpty ? 'Unnamed device' : t.name,
               style: const TextStyle(fontSize: 13)),
           subtitle: Text(fingerprintOfHex(t.keyHex),
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 11,
                   fontFamily: 'monospace',
                   color: UcColors.textSecondary)),
@@ -475,7 +507,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Widget _aboutCard(BuildContext context) {
     return _card('About', [
-      const Text(
+      Text(
         'uConnect Mobile 0.1.0 — talks the uConnect app protocol '
         '(storage 1.3) with uConnect Desktop over the uconnect library\'s '
         'end-to-end encrypted sessions.',
@@ -508,7 +540,7 @@ class _SettingsPageState extends State<SettingsPage> {
           children: [
             for (final line in state.session.logHistory.reversed)
               Text(line,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 11,
                       fontFamily: 'monospace',
                       color: UcColors.textSecondary)),
@@ -569,13 +601,13 @@ class _CollapsibleCardState extends State<_CollapsibleCard> {
                   children: [
                     Expanded(
                       child: Text(widget.title,
-                          style: const TextStyle(
+                          style: TextStyle(
                               fontWeight: FontWeight.w600, color: UcColors.text)),
                     ),
                     AnimatedRotation(
                       turns: _expanded ? 0 : -0.25,
                       duration: const Duration(milliseconds: 150),
-                      child: const Icon(Icons.expand_more,
+                      child: Icon(Icons.expand_more,
                           color: UcColors.textSecondary, size: 20),
                     ),
                   ],

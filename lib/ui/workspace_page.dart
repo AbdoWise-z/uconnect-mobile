@@ -126,7 +126,7 @@ class _StatusBar extends StatelessWidget {
       height: 28,
       padding: const EdgeInsets.symmetric(horizontal: 14),
       alignment: Alignment.centerLeft,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: UcColors.panel,
         border: Border(top: BorderSide(color: UcColors.divider)),
       ),
@@ -142,7 +142,7 @@ class _StatusBar extends StatelessWidget {
             child: Text(
               text.isEmpty ? 'Not connected' : text,
               style:
-                  const TextStyle(fontSize: 12, color: UcColors.textSecondary),
+                  TextStyle(fontSize: 12, color: UcColors.textSecondary),
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -150,7 +150,7 @@ class _StatusBar extends StatelessWidget {
             Text(
               'this device: ${shortId(s.selfId!)}',
               style:
-                  const TextStyle(fontSize: 12, color: UcColors.textDisabled),
+                  TextStyle(fontSize: 12, color: UcColors.textDisabled),
             ),
         ],
       ),
@@ -180,7 +180,7 @@ class _DevicesTab extends StatelessWidget {
               session.status == SessionStatus.error
                   ? session.statusDetail
                   : 'Not connected.',
-              style: const TextStyle(color: UcColors.textSecondary),
+              style: TextStyle(color: UcColors.textSecondary),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 12),
@@ -193,7 +193,7 @@ class _DevicesTab extends StatelessWidget {
       );
     }
     if (peers.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
           padding: EdgeInsets.all(24),
           child: Text(
@@ -244,14 +244,14 @@ class _DevicesTab extends StatelessWidget {
                 ),
                 if (p.trusted) ...[
                   const SizedBox(width: 6),
-                  const Icon(Icons.verified_user,
+                  Icon(Icons.verified_user,
                       size: 14, color: UcColors.success),
                 ],
               ],
             ),
             subtitle: Text(
               _subtitle(p),
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 12, color: UcColors.textSecondary),
             ),
             trailing: const Icon(Icons.chevron_right, size: 20),

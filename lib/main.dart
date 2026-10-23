@@ -38,6 +38,13 @@ class _UConnectAppState extends State<UConnectApp> with WidgetsBindingObserver {
   }
 
   @override
+  void didChangePlatformBrightness() {
+    // Re-render when the OS switches light/dark, so a "Follow system" scheme
+    // tracks it.
+    if (mounted) setState(() {});
+  }
+
+  @override
   void didChangeAppLifecycleState(AppLifecycleState lifecycle) {
     // When the app is really being torn down (not just backgrounded, which the
     // foreground service keeps alive on purpose), shut the node down so its
@@ -54,25 +61,34 @@ class _UConnectAppState extends State<UConnectApp> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final state = widget.state;
-    return MaterialApp(
-      title: 'uConnect',
-      theme: ucTheme(),
-      navigatorKey: state.navigatorKey,
-      debugShowCheckedModeBanner: false,
-      home: ListenableBuilder(
-        listenable: state,
-        builder: (context, _) {
-          if (!state.loaded) {
-            return const Scaffold(
-              body: Center(child: CircularProgressIndicator()),
-            );
-          }
-          if (state.store.server.isEmpty || state.store.topicUri.isEmpty) {
-            return ConnectPage(state: state);
-          }
-          return WorkspacePage(state: state);
-        },
-      ),
+    final platformBrightness = MediaQuery.platformBrightnessOf(context);
+    // Rebuild the whole app (theme included) when settings change, so picking a
+    // colour scheme restyles everything live. ucTheme() is read from the active
+    // palette, which we switch to here first.
+    return ListenableBuilder(
+      listenable: state,
+      builder: (context, _) {
+        UcColors.applyScheme(state.store.colorScheme, platformBrightness);
+        return MaterialApp(
+          title: 'uConnect',
+          theme: ucTheme(),
+          navigatorKey: state.navigatorKey,
+          debugShowCheckedModeBanner: false,
+          home: Builder(
+            builder: (context) {
+              if (!state.loaded) {
+                return const Scaffold(
+                  body: Center(child: CircularProgressIndicator()),
+                );
+              }
+              if (state.store.server.isEmpty || state.store.topicUri.isEmpty) {
+                return ConnectPage(state: state);
+              }
+              return WorkspacePage(state: state);
+            },
+          ),
+        );
+      },
     );
   }
 }

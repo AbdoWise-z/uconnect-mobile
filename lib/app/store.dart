@@ -83,6 +83,8 @@ class AppStore {
   Set<String> defaultPermissions = {};
   final trusted = <String, TrustedDevice>{}; // key hex -> device
   List<SharedFolder> shares = [];
+  // Colour scheme id (see ui/theme.dart): system, dark, darker, light, colorful.
+  String colorScheme = 'dark';
 
   Future<void> load() async {
     final file = File(path);
@@ -120,6 +122,9 @@ class AppStore {
         decoded['screenMaxWidth'] is int ? decoded['screenMaxWidth'] as int : 1920;
     screenMaxFps =
         decoded['screenMaxFps'] is int ? decoded['screenMaxFps'] as int : 60;
+    colorScheme = decoded['colorScheme'] is String
+        ? decoded['colorScheme'] as String
+        : 'dark';
     defaultPermissions = {
       if (decoded['defaults'] is List)
         for (final p in decoded['defaults'] as List)
@@ -158,6 +163,7 @@ class AppStore {
       'relayMode': relayMode,
       'screenMaxWidth': screenMaxWidth,
       'screenMaxFps': screenMaxFps,
+      'colorScheme': colorScheme,
       'defaults': defaultPermissions.toList()..sort(),
       'trusted': [for (final t in trusted.values) t.toJson()],
       'shares': [

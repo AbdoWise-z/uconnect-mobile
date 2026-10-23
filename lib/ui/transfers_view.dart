@@ -19,7 +19,7 @@ class TransfersView extends StatelessWidget {
   Widget build(BuildContext context) {
     final transfers = state.storageClient.transfers.reversed.toList();
     if (transfers.isEmpty) {
-      return const Center(
+      return Center(
         child: Text('No transfers yet.',
             style: TextStyle(color: UcColors.textSecondary)),
       );
@@ -86,7 +86,7 @@ class TransfersView extends StatelessWidget {
           children: [
             Text(
               '${t.kind == TransferKind.download ? 'from' : 'to'} $devName · $subtitle',
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 12, color: UcColors.textSecondary),
               overflow: TextOverflow.ellipsis,
             ),

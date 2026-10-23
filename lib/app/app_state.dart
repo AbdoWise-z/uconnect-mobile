@@ -224,6 +224,7 @@ class AppState extends ChangeNotifier {
     int? relayMode,
     int? screenMaxWidth,
     int? screenMaxFps,
+    String? colorScheme,
   }) async {
     if (server != null) store.server = server.trim();
     if (topicUri != null) store.topicUri = topicUri.trim();
@@ -240,6 +241,7 @@ class AppState extends ChangeNotifier {
     if (relayMode != null) store.relayMode = relayMode;
     if (screenMaxWidth != null) store.screenMaxWidth = screenMaxWidth;
     if (screenMaxFps != null) store.screenMaxFps = screenMaxFps;
+    if (colorScheme != null) store.colorScheme = colorScheme;
     await store.save();
     _applyLocalConfig();
     notifyListeners();
@@ -279,7 +281,7 @@ class AppState extends ChangeNotifier {
       barrierDismissible: false,
       builder: (context) => AlertDialog(
         title: Text(title),
-        content: Text(body, style: const TextStyle(color: UcColors.text)),
+        content: Text(body, style: TextStyle(color: UcColors.text)),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),

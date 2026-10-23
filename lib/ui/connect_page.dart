@@ -74,16 +74,16 @@ class _ConnectPageState extends State<ConnectPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Icon(Icons.hub_outlined, size: 56, color: UcColors.accent),
+                  Icon(Icons.hub_outlined, size: 56, color: UcColors.accent),
                   const SizedBox(height: 12),
-                  const Text('uConnect',
+                  Text('uConnect',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                           fontSize: 24,
                           fontWeight: FontWeight.w600,
                           color: UcColors.text)),
                   const SizedBox(height: 4),
-                  const Text(
+                  Text(
                     'Your devices, connected: browse and share files with your '
                     'computers, end-to-end encrypted.',
                     textAlign: TextAlign.center,
@@ -130,7 +130,7 @@ class _ConnectPageState extends State<ConnectPage> {
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(_error,
-                          style: const TextStyle(color: UcColors.error)),
+                          style: TextStyle(color: UcColors.error)),
                     ),
                   ],
                   const SizedBox(height: 16),
@@ -147,7 +147,7 @@ class _ConnectPageState extends State<ConnectPage> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  const Text(
+                  Text(
                     'Devices meet in a topic, shared by its invite link. Send '
                     'the link privately to your own devices only: anyone who '
                     'has it can join.',
