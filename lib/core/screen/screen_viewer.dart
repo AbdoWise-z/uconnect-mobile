@@ -106,10 +106,40 @@ class ScreenViewer {
   String controlDetail = '';
   bool cursorEmbedded = false;
 
+  // The host's monitors, as sent in scr.started, kept for their native pixel
+  // sizes: separate cursor-position datagrams are in those pixels, which can
+  // differ from the (possibly capped) encoded `width`/`height`.
+  List<Map<String, Object?>> _monitorInfo = const [];
+
+  /// Width of the coordinate space the cursor datagrams use for the monitor
+  /// currently shown — its native width, falling back to the encoded width.
+  int get cursorSpaceWidth {
+    if (monitor >= 0 && monitor < _monitorInfo.length) {
+      final w = _monitorInfo[monitor]['width'];
+      if (w is num && w > 0) return w.toInt();
+    }
+    return width;
+  }
+
+  int get cursorSpaceHeight {
+    if (monitor >= 0 && monitor < _monitorInfo.length) {
+      final h = _monitorInfo[monitor]['height'];
+      if (h is num && h > 0) return h.toInt();
+    }
+    return height;
+  }
+
   final _units = StreamController<VideoAccessUnit>.broadcast();
   final _cursorMoves = StreamController<CursorMove>.broadcast();
   final _cursorImages = StreamController<CursorImage>.broadcast();
   final _changed = StreamController<void>.broadcast();
+
+  // The last cursor shape and position seen. These broadcast streams do not
+  // buffer, and the host sends the shape only when it changes, so a late
+  // subscriber (the overlay is built after the session starts) would miss it.
+  // The overlay seeds itself from these.
+  CursorImage? lastCursorImage;
+  CursorMove? lastCursorMove;
 
   Stream<VideoAccessUnit> get units => _units.stream;
   Stream<CursorMove> get cursorMoves => _cursorMoves.stream;
@@ -313,6 +343,11 @@ class ScreenViewer {
         for (final m in mons)
           if (m is Map && m['name'] is String) m['name'] as String
     ];
+    _monitorInfo = [
+      if (mons is List)
+        for (final m in mons)
+          if (m is Map) m.map((k, v) => MapEntry(k.toString(), v))
+    ];
     monitors = mons is List ? mons.length : _int(msg, 'monitors', 1);
     monitor = _int(msg, 'monitor', 0);
     srcMaxWidth = _int(msg, 'maxWidth', 0);
@@ -340,8 +375,10 @@ class ScreenViewer {
     try {
       final png = base64Decode(msg['png'] as String);
       if (png.length <= 49 * 1024) {
-        _cursorImages.add(CursorImage(
-            png, _int(msg, 'hotspotX', 0), _int(msg, 'hotspotY', 0)));
+        final image = CursorImage(
+            png, _int(msg, 'hotspotX', 0), _int(msg, 'hotspotY', 0));
+        lastCursorImage = image;
+        _cursorImages.add(image);
       }
     } on FormatException {
       // a malformed cursor image is not worth ending the session over
@@ -529,7 +566,9 @@ class ScreenViewer {
     final x = bd.getInt32(7);
     final y = bd.getInt32(11);
     final visible = d[15] != 0;
-    _cursorMoves.add(CursorMove(x, y, visible));
+    final move = CursorMove(x, y, visible);
+    lastCursorMove = move;
+    _cursorMoves.add(move);
   }
 
   // --- control the viewer sends to the host ----------------------------------

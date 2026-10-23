@@ -7,6 +7,9 @@
 // forced full-screen landscape), and a keyboard bar sends typed text and the
 // common editing/navigation keys while controlling.
 
+import 'dart:async';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -433,7 +436,13 @@ class _ScreenViewState extends State<ScreenView> {
 
     Widget content = controlling
         ? _controlSurface(id, aspect)
-        : AspectRatio(aspectRatio: aspect, child: Texture(textureId: id));
+        : AspectRatio(
+            aspectRatio: aspect,
+            child: Stack(fit: StackFit.expand, children: [
+              Texture(textureId: id),
+              if (!widget.camera) _CursorOverlay(viewer: _viewer),
+            ]),
+          );
     // Quarter-turn the camera preview (sideways phone, etc.).
     if (widget.camera && _rotation != 0) {
       content = RotatedBox(quarterTurns: _rotation, child: content);
@@ -512,7 +521,7 @@ class _ScreenViewState extends State<ScreenView> {
                 minimumSize: const Size(44, 38),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 foregroundColor: UcColors.text,
-                side: const BorderSide(color: UcColors.inputBorder),
+                side: BorderSide(color: UcColors.inputBorder),
               ),
               onPressed: () => _viewer.sendKey(usage, true),
               child: Text(label, style: const TextStyle(fontSize: 13)),
@@ -578,7 +587,7 @@ class _ScreenViewState extends State<ScreenView> {
         ),
         child: Row(
           children: [
-            const Expanded(
+            Expanded(
               child: Text('View only. Take control to use the mouse and keyboard.',
                   style:
                       TextStyle(color: UcColors.textSecondary, fontSize: 12)),
@@ -627,7 +636,10 @@ class _ScreenViewState extends State<ScreenView> {
           },
           onPointerUp: (e) => _endPointer(e.pointer, e.localPosition, box),
           onPointerCancel: (e) => _endPointer(e.pointer, e.localPosition, box),
-          child: Texture(textureId: textureId),
+          child: Stack(fit: StackFit.expand, children: [
+            Texture(textureId: textureId),
+            _CursorOverlay(viewer: _viewer),
+          ]),
         );
       }),
     );
@@ -647,4 +659,153 @@ class _ScreenViewState extends State<ScreenView> {
     final ny = (pos.dy / box.height).clamp(0.0, 1.0);
     _viewer.sendPointer(nx, ny, _buttons);
   }
+}
+
+// Draws the host's mouse cursor over the video. The desktop sends the cursor
+// separately (shape as a PNG, position as a datagram) rather than blending it
+// into the frame — see ScreenViewer.cursorImages / cursorMoves — so without
+// this the pointer would be invisible on the phone. It fills the video box and
+// scales the cursor's native-pixel position into it. Skipped when the host
+// embeds the cursor in the frame itself (cursorEmbedded).
+class _CursorOverlay extends StatefulWidget {
+  const _CursorOverlay({required this.viewer});
+  final ScreenViewer viewer;
+
+  @override
+  State<_CursorOverlay> createState() => _CursorOverlayState();
+}
+
+class _CursorOverlayState extends State<_CursorOverlay> {
+  ui.Image? _image;
+  int _hotspotX = 0;
+  int _hotspotY = 0;
+  double _x = 0;
+  double _y = 0;
+  bool _visible = false;
+  StreamSubscription<CursorImage>? _imageSub;
+  StreamSubscription<CursorMove>? _moveSub;
+
+  @override
+  void initState() {
+    super.initState();
+    // Seed from whatever the viewer has already received, since these streams
+    // don't buffer and the shape may have arrived before we subscribed.
+    final move = widget.viewer.lastCursorMove;
+    if (move != null) {
+      _x = move.x.toDouble();
+      _y = move.y.toDouble();
+      _visible = move.visible;
+    }
+    final image = widget.viewer.lastCursorImage;
+    if (image != null) {
+      _hotspotX = image.hotspotX;
+      _hotspotY = image.hotspotY;
+      decodeImageFromList(image.png).then((decoded) {
+        if (!mounted) {
+          decoded.dispose();
+          return;
+        }
+        setState(() => _image = decoded);
+      });
+    }
+    _moveSub = widget.viewer.cursorMoves.listen((m) {
+      if (!mounted) return;
+      setState(() {
+        _x = m.x.toDouble();
+        _y = m.y.toDouble();
+        _visible = m.visible;
+      });
+    });
+    _imageSub = widget.viewer.cursorImages.listen((c) async {
+      final decoded = await decodeImageFromList(c.png);
+      if (!mounted) {
+        decoded.dispose();
+        return;
+      }
+      setState(() {
+        _image?.dispose();
+        _image = decoded;
+        _hotspotX = c.hotspotX;
+        _hotspotY = c.hotspotY;
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _imageSub?.cancel();
+    _moveSub?.cancel();
+    _image?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final image = _image;
+    if (widget.viewer.cursorEmbedded || !_visible || image == null) {
+      return const SizedBox.shrink();
+    }
+    return IgnorePointer(
+      child: CustomPaint(
+        size: Size.infinite,
+        painter: _CursorPainter(
+          image: image,
+          x: _x,
+          y: _y,
+          hotspotX: _hotspotX.toDouble(),
+          hotspotY: _hotspotY.toDouble(),
+          spaceWidth: widget.viewer.cursorSpaceWidth.toDouble(),
+          spaceHeight: widget.viewer.cursorSpaceHeight.toDouble(),
+        ),
+      ),
+    );
+  }
+}
+
+class _CursorPainter extends CustomPainter {
+  _CursorPainter({
+    required this.image,
+    required this.x,
+    required this.y,
+    required this.hotspotX,
+    required this.hotspotY,
+    required this.spaceWidth,
+    required this.spaceHeight,
+  });
+
+  final ui.Image image;
+  final double x;
+  final double y;
+  final double hotspotX;
+  final double hotspotY;
+  final double spaceWidth;
+  final double spaceHeight;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (spaceWidth <= 0 || spaceHeight <= 0) return;
+    // The cursor's position and size are in the source's native pixels; scale
+    // them by how large the video is drawn here.
+    final scaleX = size.width / spaceWidth;
+    final scaleY = size.height / spaceHeight;
+    final dst = Rect.fromLTWH(
+      (x - hotspotX) * scaleX,
+      (y - hotspotY) * scaleY,
+      image.width * scaleX,
+      image.height * scaleY,
+    );
+    final src = Rect.fromLTWH(
+        0, 0, image.width.toDouble(), image.height.toDouble());
+    canvas.drawImageRect(image, src, dst, Paint()..filterQuality = FilterQuality.medium);
+  }
+
+  @override
+  bool shouldRepaint(_CursorPainter old) =>
+      old.image != image ||
+      old.x != x ||
+      old.y != y ||
+      old.hotspotX != hotspotX ||
+      old.hotspotY != hotspotY ||
+      old.spaceWidth != spaceWidth ||
+      old.spaceHeight != spaceHeight;
 }
