@@ -50,6 +50,7 @@ class PeerRecord {
   List<String> grantedToMe = const []; // what it says it grants this device
 
   // Internals, mirroring the desktop session's PeerInfo.
+  int connectedAt = -1; // ms since epoch while connected (folder sync's "longest")
   bool inLookup = false;
   int? gone; // ucGone*, while closed
   DateTime lastAttempt = DateTime.fromMillisecondsSinceEpoch(0);
@@ -198,6 +199,7 @@ class Session {
   final List<ControlHandler> _controlHandlers = [];
   final Map<int, FrameHandler> _frameHandlers = {};
   final List<void Function(String dev, int state)> _peerStateHandlers = [];
+  final List<void Function(String dev)> _identityHandlers = [];
   final List<void Function(String dev, Uint8List bytes)> _datagramHandlers = [];
   final List<void Function(String dev, int path)> _datagramPathHandlers = [];
 
@@ -211,6 +213,8 @@ class Session {
   void setFrameHandler(int kind, FrameHandler h) => _frameHandlers[kind] = h;
   void addPeerStateHandler(void Function(String dev, int state) h) =>
       _peerStateHandlers.add(h);
+  /// Called when a connected peer proves its identity (the `id` message).
+  void addIdentityHandler(void Function(String dev) h) => _identityHandlers.add(h);
   void addDatagramHandler(void Function(String dev, Uint8List bytes) h) =>
       _datagramHandlers.add(h);
   void addDatagramPathHandler(void Function(String dev, int path) h) =>
@@ -540,6 +544,7 @@ class Session {
     final p = peers.putIfAbsent(dev, () => PeerRecord(dev));
     log('Peer ${shortId(dev)} -> ${stateName(state)}');
     if (state == ucPeerConnected) {
+      p.connectedAt = DateTime.now().millisecondsSinceEpoch;
       p.gone = null;
       p.identityState = 'pending';
       p.identityKey = '';
@@ -553,6 +558,7 @@ class Session {
         _sendGrants(dev);
       }
     } else if (state == ucPeerClosed || state == ucPeerFailed) {
+      p.connectedAt = -1;
       p.identityState = 'pending';
       p.identityKey = '';
       p.fingerprint = '';
@@ -663,6 +669,9 @@ class Session {
       p.identityKey = key;
       p.fingerprint = fingerprintOfHex(key);
       log('Peer ${shortId(dev)} proved identity ${p.fingerprint}');
+      for (final h in _identityHandlers) {
+        h(dev);
+      }
     } else {
       p.identityInvalid = true;
       p.identityState = 'invalid';

@@ -4,12 +4,16 @@
 // AppController.
 
 import 'dart:async';
+import 'dart:math';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../core/identity.dart';
 import '../core/network_rules.dart';
+import '../core/sync/sync_folder.dart';
+import '../core/sync/sync_service.dart';
 import '../core/permissions.dart';
 import '../core/screen/remote_input.dart';
 import '../core/screen/screen_capture.dart';
@@ -94,6 +98,7 @@ class AppState extends ChangeNotifier {
         cameraCapture.allCameras = const [];
       }
     }
+    _startSync();
     _applyLocalConfig();
     screenHost.offered = store.offerScreen;
     cameraHost.offered = store.offerCamera && cameraCapture.supported;
@@ -378,6 +383,167 @@ class AppState extends ChangeNotifier {
     return ok ?? false;
   }
 
+  // --- folder sync ---------------------------------------------------------------
+  // The engine (core/sync) speaks protocol section 6 with the other devices;
+  // this wires it to the session and keeps the folder list in the store.
+
+  late final SyncService sync;
+
+  /// Folders other devices offer this phone, by their key: [{id, label}].
+  final syncOffers = <String, List<Map<String, String>>>{};
+
+  /// Recent sync events, newest first.
+  final syncEvents = <SyncEvent>[];
+
+  void _startSync() {
+    sync = SyncService(
+      sendControl: (dev, msg) => session.sendControl(dev, msg),
+      sendData: (dev, id, bytes) =>
+          session.sendFrame(dev, MessageKind.syncData, id, bytes),
+      // Only a proven peer takes part; each folder's grants then name who.
+      peerKey: (dev) {
+        final p = session.peers[dev];
+        return p != null && p.identityState == 'verified' ? p.identityKey : null;
+      },
+      connectedSince: (dev) => session.peers[dev]?.connectedAt ?? -1,
+      myKeyHex: identity!.publicKeyHex,
+      stateDir: '$dataDir${Platform.pathSeparator}sync',
+    );
+    session.addControlHandler(sync.handleControl);
+    session.setFrameHandler(MessageKind.syncData, sync.handleData);
+    session.addIdentityHandler(sync.peerUp);
+    session.addPeerStateHandler((dev, state) {
+      if (state == ucPeerClosed || state == ucPeerFailed) sync.peerGone(dev);
+    });
+    _subs.add(sync.offers.listen((o) {
+      if (o.folders.isEmpty) {
+        syncOffers.remove(o.peerKey);
+      } else {
+        syncOffers[o.peerKey] = o.folders;
+      }
+      notifyListeners();
+    }));
+    _subs.add(sync.folderChanged.listen((_) => notifyListeners()));
+    _subs.add(sync.events.listen((e) {
+      syncEvents.insert(0, e);
+      if (syncEvents.length > 200) syncEvents.removeLast();
+      notifyListeners();
+    }));
+    sync.setFolders(store.syncFolders);
+  }
+
+  Future<void> _saveSyncFolders(List<FolderConfig> folders) async {
+    store.syncFolders = folders;
+    await store.save();
+    sync.setFolders(folders);
+    // Grants may have changed: let connected, proven peers hear about it.
+    for (final p in session.peers.values) {
+      if (p.stateCode == ucPeerConnected && p.identityState == 'verified') {
+        sync.peerUp(p.devId);
+      }
+    }
+    notifyListeners();
+  }
+
+  FolderConfig? syncFolder(String id) {
+    for (final f in store.syncFolders) {
+      if (f.id == id) return f;
+    }
+    return null;
+  }
+
+  FolderConfig _with(FolderConfig c,
+          {String? label, String? path, bool? paused, Map<String, Grant>? peers}) =>
+      FolderConfig(
+          id: c.id,
+          label: label ?? c.label,
+          path: path ?? c.path,
+          paused: paused ?? c.paused,
+          peers: peers ?? {...c.peers});
+
+  Future<void> _replaceSyncFolder(FolderConfig next) => _saveSyncFolders(
+      [for (final f in store.syncFolders) f.id == next.id ? next : f]);
+
+  /// Where a synced folder goes unless the user picks one: under Sync/ in the
+  /// app's own folder on shared storage (Android: Android/data/(app)/files;
+  /// iOS: Documents, shown in the Files app). No storage permission needed.
+  Future<String> defaultSyncDir(String label) async {
+    Directory? base;
+    if (Platform.isAndroid) base = await getExternalStorageDirectory();
+    base ??= await getApplicationDocumentsDirectory();
+    final safe = label.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
+    return '${base.path}${Platform.pathSeparator}Sync${Platform.pathSeparator}'
+        '${safe.isEmpty ? 'Folder' : safe}';
+  }
+
+  /// A new synced folder with no members yet (add them on its page).
+  Future<String> createSyncFolder(String path, String label) async {
+    await Directory(path).create(recursive: true);
+    final rnd = Random.secure();
+    final id = [for (var i = 0; i < 16; i++) rnd.nextInt(256)]
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
+    await _saveSyncFolders([
+      ...store.syncFolders,
+      FolderConfig(
+          id: id,
+          label: label.length > 100 ? label.substring(0, 100) : label,
+          path: path),
+    ]);
+    return id;
+  }
+
+  /// Joins a folder a proven device offers: it is sent here and accepted from.
+  Future<bool> joinSyncFolder(String peerKey, String id, String label, String path) async {
+    if (syncFolder(id) != null) return false;
+    await Directory(path).create(recursive: true);
+    await _saveSyncFolders([
+      ...store.syncFolders,
+      FolderConfig(
+          id: id,
+          label: label,
+          path: path,
+          peers: {peerKey: const Grant(receive: true, contribute: true)}),
+    ]);
+    return true;
+  }
+
+  /// Send: it gets the folder and this phone's changes. Accept: this phone
+  /// takes its changes. Both off removes it from the folder.
+  Future<void> setSyncMember(String id, String key, {required bool receive, required bool contribute}) async {
+    final c = syncFolder(id);
+    if (c == null) return;
+    final peers = {...c.peers};
+    if (!receive && !contribute) {
+      peers.remove(key);
+    } else {
+      peers[key] = Grant(receive: receive, contribute: contribute);
+    }
+    await _replaceSyncFolder(_with(c, peers: peers));
+  }
+
+  Future<void> setSyncPaused(String id, bool paused) async {
+    final c = syncFolder(id);
+    if (c != null) await _replaceSyncFolder(_with(c, paused: paused));
+  }
+
+  /// Stops syncing a folder; its files stay where they are.
+  Future<void> leaveSyncFolder(String id) async {
+    await _saveSyncFolders([for (final f in store.syncFolders) if (f.id != id) f]);
+    final state = File('$dataDir${Platform.pathSeparator}sync${Platform.pathSeparator}$id.json');
+    if (await state.exists()) await state.delete();
+  }
+
+  /// A name for a device key: from special rules, a connected peer, or short.
+  String deviceNameForKey(String key) {
+    final s = store.special[key];
+    if (s != null && s.name.isNotEmpty) return s.name;
+    for (final p in session.peers.values) {
+      if (p.identityKey == key && p.name.isNotEmpty) return p.name;
+    }
+    return 'Device ${fingerprintOfHex(key).substring(0, 9)}';
+  }
+
   // --- permissions: special rules, network rules, defaults ---------------------
 
   // What a device with this key may do here right now (a network rule's or
@@ -473,6 +639,7 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _addressTimer?.cancel();
+    unawaited(sync.dispose());
     for (final s in _subs) {
       unawaited(s.cancel());
     }

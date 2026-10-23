@@ -19,6 +19,7 @@ import 'prompt_dialog.dart';
 import 'network_rules_page.dart';
 import 'scheme_picker.dart';
 import 'settings_widgets.dart';
+import 'sync_folders_page.dart';
 import 'theme.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -74,6 +75,16 @@ class _SettingsPageState extends State<SettingsPage> {
             title: 'Storage',
             subtitle: _onOff(store.offerStorage),
             onTap: () => _open('Storage', _storagePage),
+          ),
+          SettingsTile(
+            icon: Icons.folder_copy_outlined,
+            iconColor: UcColors.warning,
+            title: 'Synced folders',
+            subtitle: store.syncFolders.isEmpty
+                ? (state.syncOffers.isEmpty ? 'None' : 'Offered to you')
+                : '${store.syncFolders.length} folder${store.syncFolders.length == 1 ? '' : 's'}',
+            onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => SyncFoldersPage(state: state))),
           ),
           SettingsTile(
             icon: Icons.videocam_outlined,

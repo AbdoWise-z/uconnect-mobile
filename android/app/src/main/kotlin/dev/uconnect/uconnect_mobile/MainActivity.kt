@@ -105,6 +105,37 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
+        // Folder sync into a folder the user picks: "All files access" on
+        // Android 11+, the storage permission before (lib/app/storage_access.dart).
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "uconnect/storage")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "hasAllFilesAccess" -> result.success(
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+                            android.os.Environment.isExternalStorageManager()
+                        else ContextCompat.checkSelfPermission(
+                            this, Manifest.permission.WRITE_EXTERNAL_STORAGE
+                        ) == PackageManager.PERMISSION_GRANTED
+                    )
+                    "requestAllFilesAccess" -> {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            startActivity(
+                                Intent(
+                                    android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                    android.net.Uri.parse("package:$packageName")
+                                )
+                            )
+                        } else {
+                            ActivityCompat.requestPermissions(
+                                this, arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 1002
+                            )
+                        }
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
         // Remote control: a viewer's input, injected through the accessibility
         // service (lib/core/screen/remote_input.dart).
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "uconnect/input")

@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../core/network_rules.dart';
+import '../core/sync/sync_folder.dart';
 
 import '../core/storage/storage_offerer.dart';
 
@@ -90,6 +91,8 @@ class AppStore {
   final special = <String, SpecialRules>{}; // key hex -> its special rules
   // Network rules, per topic id (hex): first match wins (core/network_rules).
   final networkRules = <String, List<NetworkRule>>{};
+  // Synced folders (core/sync): where each is here, and who takes part.
+  List<FolderConfig> syncFolders = [];
   List<SharedFolder> shares = [];
   // Colour scheme id (see ui/theme.dart): system, dark, darker, light, colorful.
   String colorScheme = 'dark';
@@ -148,6 +151,11 @@ class AppStore {
         if (d != null) special[d.keyHex] = d;
       }
     }
+    syncFolders = [
+      if (decoded['sync'] is List)
+        for (final f in decoded['sync'] as List)
+          if (folderConfigFromJson(f) case final c?) c
+    ];
     networkRules.clear();
     final rules = decoded['networkRules'];
     if (rules is Map) {
@@ -184,6 +192,7 @@ class AppStore {
       'colorScheme': colorScheme,
       'defaults': defaultPermissions.toList()..sort(),
       'special': [for (final t in special.values) t.toJson()],
+      'sync': [for (final f in syncFolders) folderConfigToJson(f)],
       'networkRules': {
         for (final e in networkRules.entries)
           if (e.value.isNotEmpty) e.key: networkRulesToJson(e.value)
@@ -198,4 +207,35 @@ class AppStore {
     if (await file.exists()) await file.delete();
     await tmp.rename(path);
   }
+}
+
+Map<String, Object?> folderConfigToJson(FolderConfig c) => {
+      'id': c.id,
+      'label': c.label,
+      'path': c.path,
+      'paused': c.paused,
+      'peers': {
+        for (final e in c.peers.entries)
+          e.key: {'receive': e.value.receive, 'contribute': e.value.contribute}
+      },
+    };
+
+FolderConfig? folderConfigFromJson(Object? v) {
+  if (v is! Map || v['id'] is! String || v['path'] is! String) return null;
+  final peers = <String, Grant>{};
+  if (v['peers'] is Map) {
+    for (final e in (v['peers'] as Map).entries) {
+      final g = e.value;
+      if (e.key is String && g is Map) {
+        peers[e.key as String] =
+            Grant(receive: g['receive'] == true, contribute: g['contribute'] == true);
+      }
+    }
+  }
+  return FolderConfig(
+      id: v['id'] as String,
+      label: v['label'] is String ? v['label'] as String : '',
+      path: v['path'] as String,
+      paused: v['paused'] == true,
+      peers: peers);
 }
