@@ -343,6 +343,9 @@ class Session {
         server: options.server,
         forceRelay: options.forceRelay,
         verbose: options.verbose,
+        // Keepalives every 5 s rather than 20: a carrier NAT may forget a
+        // quiet TCP connection sooner than a home router does.
+        keepaliveS: 5,
       ));
     } on Object catch (e) {
       status = SessionStatus.error;
