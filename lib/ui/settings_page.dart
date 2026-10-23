@@ -1,6 +1,8 @@
 // Settings: an overview of grouped rows (this device, appearance, topic,
-// what is shared, permissions, about), each opening a focused page
-// -- the mobile SettingsWindow.
+// what is shared, watching other devices, permissions, about), each opening a
+// focused page -- the mobile SettingsWindow. The search field above finds
+// single settings: it reads every page's sections and rows, and a result opens
+// its page pointing at the setting.
 
 import 'dart:io';
 
@@ -18,6 +20,7 @@ import '../core/session.dart';
 import 'prompt_dialog.dart';
 import 'network_rules_page.dart';
 import 'scheme_picker.dart';
+import 'screen_view.dart' show ScreenQuality;
 import 'settings_widgets.dart';
 import 'sync_folders_page.dart';
 import 'theme.dart';
@@ -40,19 +43,144 @@ class _SettingsPageState extends State<SettingsPage> {
 
   String _onOff(bool on) => on ? 'On' : 'Off';
 
-  void _open(String title, List<Widget> Function(BuildContext) builder) =>
-      openSettingsPage(context, state, title, builder);
+  void _open(String title, List<Widget> Function(BuildContext) builder,
+          {String? highlight}) =>
+      openSettingsPage(context, state, title, builder, highlight: highlight);
+
+  final _search = TextEditingController();
+  String get _query => _search.text.trim().toLowerCase();
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.only(bottom: 28),
+      children: [
+        _searchField(),
+        if (_query.isEmpty) ...[
+          _profileHeader(context),
+          ..._overview(context),
+        ] else
+          ..._results(context),
+      ],
+    );
+  }
+
+  // --- search ---------------------------------------------------------------
+
+  Widget _searchField() => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+        child: TextField(
+          controller: _search,
+          onChanged: (_) => setState(() {}),
+          textInputAction: TextInputAction.search,
+          style: TextStyle(fontSize: 15, color: UcColors.text),
+          decoration: InputDecoration(
+            hintText: 'Search settings',
+            prefixIcon: Icon(Icons.search, color: UcColors.textSecondary),
+            suffixIcon: _search.text.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: 'Clear',
+                    icon: const Icon(Icons.close),
+                    onPressed: () => setState(_search.clear),
+                  ),
+            isDense: true,
+            filled: true,
+            fillColor: UcColors.panel,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: BorderSide(color: UcColors.border),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: BorderSide(color: UcColors.border),
+            ),
+          ),
+        ),
+      );
+
+  /// Every page: what it is called and how it is built.
+  List<(String, List<Widget> Function(BuildContext))> get _pages => [
+        ('This device', _devicePage),
+        ('Appearance', _appearancePage),
+        ('Topic & connection', _topicPage),
+        ('Storage', _storagePage),
+        ('Camera', _cameraPage),
+        ('Screen sharing', _screenPage),
+        ('Remote control', _controlPage),
+        ('Watching', _watchingPage),
+        ('Special rules', _specialPage),
+        ('Default permissions', _defaultsPage),
+        ('About', _aboutPage),
+      ];
+
+  /// The settings the query matches: section titles and rows (by title or
+  /// status line), on the overview and on every page.
+  List<SettingHit> _matches(BuildContext context) {
+    final hits = <SettingHit>[];
+    final seen = <String>{};
+    void add(String text, String where, VoidCallback open) {
+      if (seen.add('$where\u0001$text')) hits.add(SettingHit(text, where, open));
+    }
+
+    for (final hit in settingsIn(_overview(context))) {
+      if (!hit.matches(_query)) continue;
+      final row = hit.row;
+      if (row is SettingsTile && row.onTap != null) add(hit.text, 'Settings', row.onTap!);
+    }
+    for (final (title, builder) in _pages) {
+      if (title.toLowerCase().contains(_query)) {
+        add(title, 'Settings', () => _open(title, builder));
+      }
+      for (final hit in settingsIn(builder(context))) {
+        if (!hit.matches(_query)) continue;
+        add(hit.text, hit.section == null ? title : '$title › ${hit.section}',
+            () => _open(title, builder, highlight: hit.text));
+      }
+    }
+    return hits;
+  }
+
+  List<Widget> _results(BuildContext context) {
+    final hits = _matches(context);
+    if (hits.isEmpty) {
+      return [
+        Padding(
+          padding: const EdgeInsets.all(32),
+          child: Text('No settings match "${_search.text.trim()}".',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: UcColors.textSecondary)),
+        ),
+      ];
+    }
+    return [
+      SettingsSection(title: 'Results', children: [
+        for (final hit in hits)
+          SettingsTile(
+            icon: Icons.search,
+            iconColor: UcColors.textSecondary,
+            title: hit.text,
+            subtitle: hit.where,
+            onTap: hit.open,
+          ),
+      ]),
+    ];
+  }
+
+  // --- overview -------------------------------------------------------------
+
+  List<Widget> _overview(BuildContext context) {
     final store = state.store;
     final specialCount = store.special.length;
     final ruleCount = state.networkRules.length;
     final defaultsCount = store.defaultPermissions.length;
-    return ListView(
-      padding: const EdgeInsets.only(bottom: 28),
-      children: [
-        _profileHeader(context),
+    return [
         SettingsSection(title: 'General', children: [
           SettingsTile(
             icon: Icons.palette_outlined,
@@ -110,6 +238,15 @@ class _SettingsPageState extends State<SettingsPage> {
             onTap: () => _open('Remote control', _controlPage),
           ),
         ]),
+        SettingsSection(title: 'Use other devices', children: [
+          SettingsTile(
+            icon: Icons.visibility_outlined,
+            iconColor: const Color(0xFF6A8CDE),
+            title: 'Watching',
+            subtitle: 'Quality: ${_viewQuality.label}',
+            onTap: () => _open('Watching', _watchingPage),
+          ),
+        ]),
         SettingsSection(
           title: 'Permissions',
           footer: 'Each device gets what its special rules, this topic\'s '
@@ -154,8 +291,7 @@ class _SettingsPageState extends State<SettingsPage> {
             onTap: () => _open('About', _aboutPage),
           ),
         ]),
-      ],
-    );
+    ];
   }
 
   // --- overview header -----------------------------------------------------
@@ -587,6 +723,34 @@ class _SettingsPageState extends State<SettingsPage> {
     ];
   }
 
+  ScreenQuality get _viewQuality =>
+      ScreenQuality.forStore(state.store.screenMaxWidth, state.store.screenMaxFps);
+
+  // Watching other devices: what this phone asks them for. The viewer's own
+  // quality menu changes the same setting.
+  List<Widget> _watchingPage(BuildContext context) => [
+        SettingsSection(
+          title: 'Viewing quality',
+          footer: 'What this phone asks for when it watches another device\'s '
+              'screen or camera. A lower one keeps playback smooth on a slow '
+              'connection; the viewer can change it too.',
+          children: [
+            for (final q in ScreenQuality.presets)
+              SettingsTile(
+                icon: Icons.high_quality_outlined,
+                iconColor: q == _viewQuality ? UcColors.accent : UcColors.textSecondary,
+                title: q.label,
+                subtitle: '${q.maxWidth} px wide · ${q.maxFps} fps',
+                trailing: q == _viewQuality
+                    ? Icon(Icons.check, color: UcColors.accent)
+                    : const SizedBox.shrink(),
+                onTap: () => state.saveSettings(
+                    screenMaxWidth: q.maxWidth, screenMaxFps: q.maxFps),
+              ),
+          ],
+        ),
+      ];
+
   List<Widget> _aboutPage(BuildContext context) => [
         SettingsSection(
           footer: 'Talks the uConnect app protocol with uConnect Desktop over '
@@ -697,6 +861,7 @@ class _SettingsPageState extends State<SettingsPage> {
           SettingsTile(
             icon: Icons.speed,
             title: 'Frame rate',
+            subtitle: 'Frames per second (fps), at most',
             trailing: drop(state.store.cameraMaxFps, const [60, 30, 24, 15],
                 ' fps', (v) => state.saveSettings(cameraMaxFps: v)),
           ),

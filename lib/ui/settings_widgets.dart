@@ -1,6 +1,7 @@
 // Building blocks for the settings screens: grouped sections of rows, rows with
 // an icon chip, switch rows, and a sub-page scaffold that rebuilds when the
-// app state changes.
+// app state changes. A sub-page opened from settings search scrolls to the
+// setting it was opened for and makes it glow (SettingsHighlight).
 
 import 'package:flutter/material.dart';
 
@@ -33,14 +34,17 @@ class SettingsSection extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (title != null)
-            Padding(
-              padding: const EdgeInsets.only(left: 4, bottom: 8),
-              child: Text(title!.toUpperCase(),
-                  style: TextStyle(
-                      fontSize: 11.5,
-                      letterSpacing: 0.8,
-                      fontWeight: FontWeight.w600,
-                      color: UcColors.textSecondary)),
+            SettingsGlow(
+              active: SettingsHighlight.of(context) == title,
+              child: Padding(
+                padding: const EdgeInsets.only(left: 4, bottom: 8),
+                child: Text(title!.toUpperCase(),
+                    style: TextStyle(
+                        fontSize: 11.5,
+                        letterSpacing: 0.8,
+                        fontWeight: FontWeight.w600,
+                        color: UcColors.textSecondary)),
+              ),
             ),
           Container(
             clipBehavior: Clip.antiAlias,
@@ -109,6 +113,13 @@ class SettingsTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return SettingsGlow(
+      active: SettingsHighlight.of(context) == title,
+      child: _row(),
+    );
+  }
+
+  Widget _row() {
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -188,18 +199,138 @@ class SettingsSwitchTile extends StatelessWidget {
       );
 }
 
+/// A section title or row found by settings search.
+class SettingHit {
+  SettingHit(this.text, this.where, this.open);
+  final String text;
+  final String where; // page (and section) it is on
+  final VoidCallback open;
+}
+
+/// One setting on a page, as search reads it: a section title or a row.
+class SettingEntry {
+  SettingEntry(this.text, this.section, this.detail, this.row);
+  final String text;
+  final String? section;
+  final String? detail; // a row's status line, searched too
+  final Widget? row;
+
+  bool matches(String query) =>
+      query.isNotEmpty &&
+      (text.toLowerCase().contains(query) ||
+          (detail?.toLowerCase().contains(query) ?? false));
+}
+
+/// The sections and rows among a page's widgets.
+List<SettingEntry> settingsIn(List<Widget> page) {
+  final out = <SettingEntry>[];
+  for (final w in page) {
+    if (w is! SettingsSection) continue;
+    if (w.title != null) out.add(SettingEntry(w.title!, null, w.footer, null));
+    for (final row in w.children) {
+      if (row is SettingsTile) {
+        out.add(SettingEntry(row.title, w.title, row.subtitle, row));
+      } else if (row is SettingsSwitchTile) {
+        out.add(SettingEntry(row.title, w.title, row.subtitle, row));
+      }
+    }
+  }
+  return out;
+}
+
+/// The title of the setting a sub-page was opened for from search: its row
+/// (or section) scrolls into view and glows.
+class SettingsHighlight extends InheritedWidget {
+  const SettingsHighlight({required this.text, required super.child, super.key});
+
+  final String? text;
+
+  static String? of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<SettingsHighlight>()?.text;
+
+  @override
+  bool updateShouldNotify(SettingsHighlight oldWidget) => text != oldWidget.text;
+}
+
+/// Scrolls [child] into view once and lights it up briefly when [active].
+class SettingsGlow extends StatefulWidget {
+  const SettingsGlow({required this.active, required this.child, super.key});
+
+  final bool active;
+  final Widget child;
+
+  @override
+  State<SettingsGlow> createState() => _SettingsGlowState();
+}
+
+class _SettingsGlowState extends State<SettingsGlow>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _glow = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 2600));
+
+  @override
+  void initState() {
+    super.initState();
+    if (!widget.active) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Scrollable.ensureVisible(context,
+          alignment: 0.3, duration: const Duration(milliseconds: 250));
+      _glow.forward(from: 0);
+    });
+  }
+
+  @override
+  void dispose() {
+    _glow.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.active) return widget.child;
+    return AnimatedBuilder(
+      animation: _glow,
+      builder: (context, child) {
+        final t = _glow.value;
+        // Up quickly, held for a moment, then faded.
+        final strength = t == 0
+            ? 0.0
+            : t < 0.06
+                ? t / 0.06
+                : t < 0.45
+                    ? 1.0
+                    : 1 - (t - 0.45) / 0.55;
+        return DecoratedBox(
+          decoration: BoxDecoration(
+            color: UcColors.accent.withValues(alpha: 0.24 * strength),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+                color: UcColors.accent.withValues(alpha: strength), width: 1.5),
+          ),
+          child: child,
+        );
+      },
+      child: widget.child,
+    );
+  }
+}
+
 /// A pushed settings screen. Rebuilds with the app state, so values and the
-/// colour scheme stay current while it is open.
+/// colour scheme stay current while it is open. Laid out in one piece (not a
+/// lazy list), so a highlighted setting far down can still be scrolled to.
 class SettingsSubpage extends StatelessWidget {
   const SettingsSubpage(
       {required this.title,
       required this.state,
       required this.builder,
+      this.highlight,
       super.key});
 
   final String title;
   final AppState state;
   final List<Widget> Function(BuildContext context) builder;
+  final String? highlight;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -207,17 +338,26 @@ class SettingsSubpage extends StatelessWidget {
         builder: (context, _) => Scaffold(
           backgroundColor: UcColors.canvas,
           appBar: AppBar(title: Text(title)),
-          body: ListView(
-            padding: const EdgeInsets.only(bottom: 28),
-            children: builder(context),
+          body: SettingsHighlight(
+            text: highlight,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.only(bottom: 28),
+              child: Builder(
+                builder: (context) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: builder(context),
+                ),
+              ),
+            ),
           ),
         ),
       );
 }
 
-/// Pushes a settings sub-page.
+/// Pushes a settings sub-page; [highlight] is the setting to point out.
 void openSettingsPage(BuildContext context, AppState state, String title,
-        List<Widget> Function(BuildContext context) builder) =>
+        List<Widget> Function(BuildContext context) builder,
+        {String? highlight}) =>
     Navigator.of(context).push(MaterialPageRoute<void>(
-        builder: (_) =>
-            SettingsSubpage(title: title, state: state, builder: builder)));
+        builder: (_) => SettingsSubpage(
+            title: title, state: state, builder: builder, highlight: highlight)));
