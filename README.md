@@ -1,67 +1,94 @@
 <h1 align="center">uConnect Mobile</h1>
 
 <p align="center">
-  Your phone, connected to your computers: browse, download and upload files
-  on your devices' shared folders, end-to-end encrypted. The Flutter companion
-  to <a href="https://github.com/AbdoWise-z/uconnect-desktop">uConnect Desktop</a>.
+  Your phone, connected to your computers: files both ways, synced folders,
+  screen and camera sharing, and remote control, end-to-end encrypted. The
+  Flutter companion to <a href="https://github.com/AbdoWise-z/uconnect-desktop">uConnect Desktop</a>.
 </p>
 
-> **Beta.** uConnect is in public beta: expect rough edges.
+<p align="center">
+  <a href="https://github.com/AbdoWise-z/uconnect-mobile/releases">Download</a> ·
+  <a href="https://github.com/AbdoWise-z/uconnect-desktop/blob/master/docs/protocol.md">Protocol</a>
+</p>
+
+> **Beta.** uConnect is in public beta: expect rough edges, and keep backups of
+> anything you sync.
 
 ## Features
 
-- **Devices you trust.** Devices meet in a *topic*, shared by an invite link
-  (paste it, or read the QR code from another device's settings). Each
-  verifies the others' fingerprints, then decides exactly what they may do:
-  every service is behind a permission.
-- **Storage, both ways.** Browse, download and upload files in the folders
-  your computers share — and share a folder from the phone, with read-only
-  shares and per-device permissions, speaking the same protocol
-  (storage 1.3) as the desktop app.
-- **Resumable, verified transfers.** Downloads resume where they stopped and
-  every file is checked against its SHA-256 before it is kept.
-- **Same trust model as the desktop.** Ed25519 device identities bound to each
-  encrypted session; trusted-only grants never apply to devices you have not
-  verified.
+- **Topics and invite links.** Devices meet in a *topic*, shared by an
+  invite link. Scan a computer's invite QR code with the camera and uConnect
+  opens on it (`uconn://` links), or paste the link. Leave a topic at any
+  time; the connect page offers to rejoin it.
+- **Your rules, per device.** Every service is behind a permission, and for
+  each device the first of these applies:
+  1. its **special rules** — permissions of its own, added after checking its
+     fingerprint;
+  2. this topic's **network rules** — ordered address patterns such as
+     `m.m.m.x` (your own subnet) or `100.x.x.x`, matched against the address
+     its direct connection comes from;
+  3. your **defaults**.
 
-Screen sharing, remote control, camera and extended display are desktop
-features that this version of the mobile app does not implement yet; the
-protocol leaves room for them, and the permission editor lists them as
-unavailable.
+  Rules are per topic, and a device can copy another device's rules for quick
+  setup on a trusted network.
+- **Storage, both ways.** Browse, download and upload files in the folders
+  your computers share, and share folders from the phone, with read-only
+  shares. Downloads resume and every file is checked against its SHA-256.
+- **Folder sync.** Keep a folder the same on the phone and your computers,
+  with conflicts kept rather than overwritten. Only devices with special rules
+  take part, and you choose per folder who is sent it and whose changes you
+  take.
+- **Screen, camera and control.** Watch a computer's screen or camera, and
+  share the phone's own screen and camera, each behind a consent prompt
+  unless that device's rules allow it without asking. A computer can control
+  the phone (taps, swipes, typing) through the accessibility service you
+  enable.
+- **Stays connected.** A foreground service keeps the session alive in the
+  background, and ends it cleanly when the app closes.
+- **Color schemes.** Follow system, Dark, Darker, Light or Colorful.
 
 ### Screenshots
 
 <p align="center">
-  <img src="docs/images/connect-page.png" width="260"
-       alt="The first-run page: rendezvous server, invite link, Connect">
-  <img src="docs/images/connected-to-desktop.png" width="260"
-       alt="The devices list, connected to a uConnect Desktop session on a laptop">
+  <img src="docs/images/devices.png" width="230" alt="The devices in the topic">
+  <img src="docs/images/device.png" width="230" alt="A computer's page: what it lets you do, its connection, identity and rules">
+  <img src="docs/images/settings.png" width="230" alt="Settings: appearance, topic, what the phone shares, permissions">
 </p>
 <p align="center">
-  <sub>Left: first run. Right: a phone connected to a uConnect Desktop session
-  on a laptop, over the relay, identity verified.</sub>
+  <sub>The devices in a topic · a computer's page, with where it connects from and which rules apply · settings</sub>
+</p>
+<p align="center">
+  <img src="docs/images/themes.gif" width="230" alt="Switching color schemes live">
+  <img src="docs/images/synced-folders.png" width="230" alt="Synced folders on the phone">
+  <img src="docs/images/connect-page.png" width="230" alt="The connect page after leaving a topic, offering to rejoin it">
+</p>
+<p align="center">
+  <sub>Color schemes switch live · synced folders · offline, with the last topic ready to rejoin</sub>
 </p>
 
 ## How it works
 
 Devices find each other through a **rendezvous server**, which introduces
 them and then gets out of the way: they connect directly, punching through
-NAT where they can, or fall back to the server's relay — which carries only
+NAT where they can, or fall back to the server's relay, which carries only
 ciphertext it cannot read. Networking comes from the
 [uconnect](https://github.com/AbdoWise-z/uconnect) library, compiled into the
 app and driven over Dart FFI; the app protocol on top is specified in
 [uconnect-desktop's docs/protocol.md](https://github.com/AbdoWise-z/uconnect-desktop/blob/master/docs/protocol.md).
+Video is H.264, encoded and decoded in hardware through Android's MediaCodec.
 
 ## Getting started
 
 1. Set up [uConnect Desktop](https://github.com/AbdoWise-z/uconnect-desktop)
    on your computers, with a rendezvous server both it and the phone can reach.
-2. Install uConnect Mobile and give it the server's address (`host:port`).
-3. Paste the topic's **invite link** from the desktop app (or create the topic
-   on the phone and paste its link into the desktop app). Send invite links
-   privately: anyone who has one can join the topic.
-4. **Trust** each device after checking its fingerprint, then grant the
-   permissions you want under each device.
+2. Install uConnect Mobile (the APK from the
+   [releases](https://github.com/AbdoWise-z/uconnect-mobile/releases)) and
+   give it the server's address (`host:port`).
+3. Join the topic: scan the invite QR code a computer shows (Topic → Show Invite QR Code)
+   or paste its link. Send invite links privately: anyone who has one can join.
+4. On each device's page, compare fingerprints and **add special rules** to
+   the devices you own, then choose what they may do. For a home network, a
+   network rule such as `m.m.m.x` can cover them all at once.
 
 ## Building
 
@@ -93,17 +120,17 @@ operations against a host peer.
 powershell -File scripts/e2e-android.ps1
 ```
 
-This suite is green on a physical arm64 device against a Windows host peer; add
-Mac/iOS devices with `-DeviceId` once the iOS framework (below) is built.
-
 ## Platforms
 
-|                               | Android 9+ | iOS |
-|-------------------------------|:----------:|:---:|
-| Browse / download / upload    | ✓ | planned |
-| Offer a shared folder         | ✓ | planned |
-| Folder sync                   | — | — |
-| Watch a shared screen         | — | — |
+|                                   | Android 9+ | iOS |
+|-----------------------------------|:----------:|:---:|
+| Browse / download / upload        | ✓ | planned |
+| Share folders from the phone      | ✓ | planned |
+| Folder sync                       | ✓ | planned |
+| Watch a screen or camera          | ✓ | planned |
+| Share the phone's screen / camera | ✓ | — |
+| Be controlled                     | ✓ (accessibility service) | — |
+| Invite links and QR codes         | ✓ | ✓ (untested) |
 
 iOS needs the uconnect library built as a static XCFramework and a Mac to
 build on; the Dart side is platform-independent and ready for it.
