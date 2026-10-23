@@ -93,12 +93,27 @@ void main() {
     pacer.pump(1, send);
     expect(sent, [0, 1, 2, 3]);
 
-    for (var i = 0; i < PacedSender.maxQueuedFrames; i++) {
+    for (var i = 0; i < pacer.maxQueuedFrames; i++) {
       expect(pacer.add(packets(2), 100, intervalMs: 33), isTrue);
     }
     expect(pacer.add(packets(2), 100, intervalMs: 33), isFalse); // full
     expect(pacer.pump(100 + 200, (p) => false), isFalse); // too old: dropped
     expect(pacer.idle, isTrue);
-    expect(pacer.dropped, 1 + PacedSender.maxQueuedFrames);
+    expect(pacer.dropped, 1 + pacer.maxQueuedFrames);
+  });
+
+  test('a path losing much of the stream for seconds is lossy; a blip is not', () {
+    final path = LossyPath();
+    for (var i = 0; i < 5; i++) {
+      expect(path.report(received: 50, lost: 50), isFalse); // not yet: 5 of 6
+    }
+    expect(path.report(received: 50, lost: 50), isTrue);
+
+    final blips = LossyPath();
+    for (var i = 0; i < 30; i++) {
+      // one bad report in three: never most of the window
+      expect(blips.report(received: 100, lost: i % 3 == 0 ? 40 : 0), isFalse);
+    }
+    expect(blips.report(received: 0, lost: 0), isFalse); // nothing reported
   });
 }

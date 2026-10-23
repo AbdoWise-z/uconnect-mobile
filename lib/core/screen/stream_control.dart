@@ -37,6 +37,29 @@ class BitrateControl {
   }
 }
 
+/// Decides when a UDP path loses too much to stream over, from the viewer's
+/// reports: some networks (mobile uplinks policing UDP) drop a large share of
+/// datagrams at any rate, and the stream gets through only over TCP. True
+/// once most of the last [window] reports lost more than [threshold] of what
+/// was sent.
+class LossyPath {
+  LossyPath({this.window = 10, this.needed = 6, this.threshold = 0.15});
+
+  final int window, needed;
+  final double threshold;
+  final _recent = <bool>[];
+
+  bool report({required int received, required int lost}) {
+    final total = received + lost;
+    if (total == 0) return false;
+    _recent.add(lost / total > threshold);
+    if (_recent.length > window) _recent.removeAt(0);
+    return _recent.length >= needed && _recent.where((bad) => bad).length >= needed;
+  }
+
+  void reset() => _recent.clear();
+}
+
 /// How the transit time of complete frames varies (arrival minus capture
 /// time; the two clocks' offset cancels in the differences): the jitter, and
 /// the trend, which rises while a queue builds on the path.
@@ -71,7 +94,11 @@ class DelayMeter {
 /// with every frame behind them (they depend on it); the caller then asks the
 /// encoder for a keyframe.
 class PacedSender {
-  static const maxQueuedFrames = 3;
+  PacedSender({this.maxQueuedFrames = 3});
+
+  /// Frames that may wait; more are dropped. Enough to hold the frames
+  /// produced while a keyframe is still being spread out.
+  final int maxQueuedFrames;
 
   final _queue = <_PacedFrame>[];
   int dropped = 0;
@@ -104,10 +131,12 @@ class PacedSender {
   /// caller should ask for a keyframe).
   bool pump(int nowMs, bool Function(Uint8List) send) {
     if (_queue.isEmpty) return true;
-    // Late past its own spread (a keyframe's can be long), not just old.
+    // Stuck, not just waiting its turn: frames behind a keyframe that is
+    // still being spread out are not stale; one that could have gone out
+    // for a while (the transport refusing it) is.
     final budget = max(150, _intervalMs * 4);
     final first = _queue.first;
-    if (nowMs - first.enqueued > budget + (first.due - first.start)) {
+    if (nowMs - first.start > budget + (first.due - first.start)) {
       dropped += _queue.length;
       _queue.clear();
       return false;

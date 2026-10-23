@@ -370,6 +370,10 @@ class UcBindings {
             Bool Function(Pointer<NativeNode>, UcTopicId, UcDevId, Pointer<Uint8>, Size),
             bool Function(Pointer<NativeNode>, UcTopicId, UcDevId, Pointer<Uint8>,
                 int)>('uconnect_topic_send_datagram'),
+        topicSendDatagramsOverTcp = lib.lookupFunction<
+            Bool Function(Pointer<NativeNode>, UcTopicId, UcDevId),
+            bool Function(Pointer<NativeNode>, UcTopicId,
+                UcDevId)>('uconnect_topic_send_datagrams_over_tcp'),
         topicSetMaxPeers = lib.lookupFunction<
             Void Function(Pointer<NativeNode>, UcTopicId, Size),
             void Function(
@@ -471,6 +475,7 @@ class UcBindings {
   final int Function(Pointer<NativeNode>, UcTopicId, UcDevId) topicDatagramPath;
   final bool Function(Pointer<NativeNode>, UcTopicId, UcDevId, Pointer<Uint8>, int)
       topicSendDatagram;
+  final bool Function(Pointer<NativeNode>, UcTopicId, UcDevId) topicSendDatagramsOverTcp;
 
   final void Function(Pointer<NativeNode>, UcTopicId, int) topicSetMaxPeers;
   final void Function(Pointer<NativeNode>, UcTopicId, bool) topicSetAutoConnect;

@@ -11,7 +11,7 @@ import 'dart:typed_data';
 
 import '../permissions.dart';
 import '../session.dart';
-import '../../uconnect/uconnect.dart' show ucPathDirect;
+import '../../uconnect/uconnect.dart' show ucPathDirect, ucPathRelayed;
 import 'remote_input.dart';
 import 'screen_capture.dart';
 import 'stream_control.dart';
@@ -78,12 +78,19 @@ class ScreenHost {
   int _fps = 30;
   // This session's bitrate, within its cap: the settings', or the viewer's if lower.
   BitrateControl _rate = BitrateControl(bitrate: 8000000, cap: 16000000);
+  // A UDP path that loses too much: the stream moves to TCP (7.2).
+  final _lossy = LossyPath();
+  bool _overTcp = false;
   int get _bitrate => _rate.bitrate;
 
   // Each frame's datagrams go out spread over part of a frame interval, not
-  // in one burst (7.2); _pumpTimer runs while some are waiting.
-  PacedSender _pacer = PacedSender();
+  // in one burst (7.2), a keyframe no faster than the bitrate; the frames
+  // behind it wait. _pumpTimer runs while some are waiting.
+  PacedSender _pacer = PacedSender(maxQueuedFrames: 60);
   Timer? _pumpTimer;
+  // When a keyframe was last asked of the encoder: one is big, and asking
+  // again while it is still going out only floods the uplink.
+  int _keyframeAt = -1000;
 
   // Per-second statistics for the viewer ($prefix.stats).
   final _clock = Stopwatch()..start();
@@ -116,7 +123,7 @@ class ScreenHost {
         case 'request':
           _onRequest(dev, msg);
         case 'keyframe':
-          if (_is(msg, 'session') && dev == _viewer) capture.requestKeyframe();
+          if (_is(msg, 'session') && dev == _viewer) _keyframe();
         case 'nack':
           if (_is(msg, 'session') && dev == _viewer) _onNack(msg);
         case 'report':
@@ -262,7 +269,10 @@ class ScreenHost {
     _request = request;
     _session = 1 + _rand.nextInt(0xFFFE); // nonzero u16
     _seq = 0;
-    _pacer = PacedSender();
+    _pacer = PacedSender(maxQueuedFrames: 60);
+    _keyframeAt = -1000;
+    _lossy.reset();
+    _overTcp = false;
     state = HostState.sharing;
     _controlOn = false;
     _history.clear();
@@ -394,7 +404,7 @@ class ScreenHost {
       'height': _height,
     });
     Timer(const Duration(milliseconds: 300), () {
-      if (state == HostState.sharing && _viewer == dev) capture.requestKeyframe();
+      if (state == HostState.sharing && _viewer == dev) _keyframe();
     });
     _notify();
   }
@@ -422,10 +432,20 @@ class ScreenHost {
     _remember(seq, datagrams);
     // A frame that cannot be queued is lost: the next must be a keyframe.
     if (!_pacer.add(datagrams, _clock.elapsedMilliseconds,
-        intervalMs: 1000 ~/ max(1, _fps), paceBps: 2 * _bitrate, maxSpreadMs: 200)) {
-      capture.requestKeyframe();
+        intervalMs: 1000 ~/ max(1, _fps), paceBps: max(500000, _bitrate), maxSpreadMs: 500)) {
+      _keyframe();
     }
     _pump();
+  }
+
+  // Asks the encoder for a keyframe, at most once a second: the viewer asks
+  // every 200 ms while it waits, and on a policed uplink (cellular) keyframes
+  // that often are most of the traffic and get lost themselves.
+  void _keyframe() {
+    final now = _clock.elapsedMilliseconds;
+    if (now - _keyframeAt < 1000) return;
+    _keyframeAt = now;
+    capture.requestKeyframe();
   }
 
   // Sends what is due, and comes back in a couple of milliseconds while
@@ -436,7 +456,7 @@ class ScreenHost {
     final dev = _viewer;
     if (dev == null || state != HostState.sharing) return;
     if (!_pacer.pump(_clock.elapsedMilliseconds, (dg) => _send(dev, dg))) {
-      capture.requestKeyframe(); // stale frames were dropped
+      _keyframe(); // stale frames were dropped
     }
     if (!_pacer.idle) _pumpTimer = Timer(const Duration(milliseconds: 2), _pump);
   }
@@ -492,9 +512,25 @@ class ScreenHost {
   // Rate control (7.2, BitrateControl): loss and rising delay ease it down,
   // clean reports raise it.
   void _onReport(Map<String, Object?> msg) {
+    final received = _intf(msg, 'received'), lost = _intf(msg, 'lost');
+    // UDP losing much of the stream for seconds (a mobile uplink policing
+    // it): send over TCP from now on, late rather than lost, and start the
+    // bitrate over from where a relayed path would.
+    final dev = _viewer;
+    if (!_overTcp && dev != null && _lossy.report(received: received, lost: lost)) {
+      final path = session.node?.datagramPath(session.topicId, dev) ?? 0;
+      if ((path == ucPathDirect || path == ucPathRelayed) &&
+          (session.node?.sendDatagramsOverTcp(session.topicId, dev) ?? false)) {
+        _overTcp = true;
+        _rate = BitrateControl(bitrate: min(_rate.cap, max(_rate.bitrate, 1500000)), cap: _rate.cap);
+        capture.setBitrate(_bitrate);
+        _keyframe();
+        return;
+      }
+    }
     final changed = _rate.report(
-        received: _intf(msg, 'received'),
-        lost: _intf(msg, 'lost'),
+        received: received,
+        lost: lost,
         trendMs: msg['owdTrendMs'] is num ? (msg['owdTrendMs'] as num).toDouble() : 0.0);
     if (changed != null) capture.setBitrate(changed);
   }

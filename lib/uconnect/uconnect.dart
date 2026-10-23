@@ -671,6 +671,17 @@ class UcNode {
     return ok;
   }
 
+  /// Our datagrams to [devHex] go over the TCP connection from now on, even
+  /// though UDP works: for a path that loses too much. False if no channel.
+  bool sendDatagramsOverTcp(String topicHex, String devHex) {
+    final tid = _tid(topicHex);
+    final did = _did(devHex);
+    final ok = ucBindings.topicSendDatagramsOverTcp(_node, tid.ref, did.ref);
+    calloc.free(tid);
+    calloc.free(did);
+    return ok;
+  }
+
   void setAutoConnect(String topicHex, bool on) {
     final tid = _tid(topicHex);
     ucBindings.topicSetAutoConnect(_node, tid.ref, on);
