@@ -131,6 +131,8 @@ class MediaSender {
   /// path could never carry the rate.
   int get _inflightLimit => _bwe.targetBps * max(inflightMs, (1.5 * minRttMs).round()) ~/ 8000;
   double minRttMs = 0;
+  int _reliableSinceMs = -1; // when the path became reliable, as seen by pump
+  bool _wasReliable = false;
 
   /// Sends what the pacing budget allows; call every few milliseconds.
   /// Returns false if the transport refused a packet (try again soon).
@@ -139,6 +141,10 @@ class MediaSender {
     // packets in order; a frame's packets leave a few at a time.
     final rate = _bwe.targetBps * pacingGain / 8000; // bytes per ms
     if (_lastPumpMs != 0) _budgetBytes = min(_budgetBytes + rate * (nowMs - _lastPumpMs), _maxBurstBytes + rate * 5);
+    if (reliable != _wasReliable) {
+      _wasReliable = reliable;
+      _reliableSinceMs = reliable ? nowMs : -1;
+    }
     final weight = _lastPumpMs != 0 && _smoothEncoderBps > 0 ? min(1.0, (nowMs - _lastPumpMs) / 1000) : 1.0;
     _smoothEncoderBps += (encoderBps - _smoothEncoderBps) * weight;
     _lastPumpMs = nowMs;
@@ -213,7 +219,10 @@ class MediaSender {
     if (results.isNotEmpty) _bwe.onFeedback(results, nowMs, rttMs);
     // On a reliable path the bound on what is in flight is what limits
     // sending when the path cannot drain it: the rate follows what arrives.
-    if (reliable && results.isNotEmpty && inflightBytes >= 0.9 * _inflightLimit && _bwe.receiveBps > 0) {
+    // Not in the path's first moments (opening, or just moved to TCP), when
+    // what arrives says little.
+    if (reliable && _reliableSinceMs >= 0 && nowMs - _reliableSinceMs > 2000 && results.isNotEmpty &&
+        inflightBytes >= 0.9 * _inflightLimit && _bwe.receiveBps > 0) {
       _bwe.limitTo((0.85 * _bwe.receiveBps).toInt());
     }
     // Repeats: what it still wants, once per 40 ms each, while it is recent.

@@ -16,6 +16,8 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show debugPrint;
+
 import '../session.dart';
 import 'media_packet.dart';
 import 'media_receiver.dart';
@@ -447,9 +449,18 @@ class ScreenViewer {
   void _sendFeedback(MediaReceiver media, int now) {
     final dev = _dev;
     if (dev == null) return;
-    session.node?.sendDatagram(
-        session.topicId, dev, media.takeFeedback(now, playoutMs, _decodeMs.toDouble()));
+    final ok = session.node?.sendDatagram(
+            session.topicId, dev, media.takeFeedback(now, playoutMs, _decodeMs.toDouble())) ??
+        false;
+    if (ok != _feedbackSent || now - _feedbackLogMs > 5000) {
+      _feedbackSent = ok;
+      _feedbackLogMs = now;
+      debugPrint('[screen viewer] feedback ${ok ? 'sent' : 'refused'}, media path ${session.node?.datagramPath(session.topicId, dev)}');
+    }
   }
+
+  bool _feedbackSent = false;
+  int _feedbackLogMs = -100000;
 
   // Once a second: the overlay's figures.
   void _everySecond() {

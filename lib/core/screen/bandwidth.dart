@@ -26,8 +26,8 @@ class BandwidthEstimator {
   static const double overuseThresholdMs = 12.5;
   static const int _trendWindow = 20;
   static const double _trendGain = 4.0;
-  static const double _overuseHoldMs = 10;
-  static const double _receiveWindowMs = 500;
+  static const double _overuseHoldMs = 100; // a cellular link delivers in bursts: a sawtooth of delay
+  static const double _receiveWindowMs = 1000;
   static const double _maxTargetOverReceived = 1.5;
 
   final int minBps, maxBps;
@@ -111,7 +111,10 @@ class BandwidthEstimator {
       _deltas = min(_deltas + 1, 60);
     }
     if (got + lost > 0) lossRate = 0.8 * lossRate + 0.2 * lost / (got + lost);
-    // The receive rate over the last half second of arrivals.
+    // The receive rate over the last second of arrivals. A link that
+    // delivers in bursts (cellular) packs a window's packets into a few
+    // milliseconds: the span is never read shorter than a quarter second,
+    // and a window that has filled counts as the whole of it.
     while (_received.isNotEmpty && _received.first[0] < _lastArrivalMs - _receiveWindowMs) {
       _received.removeAt(0);
     }
@@ -120,7 +123,8 @@ class BandwidthEstimator {
       for (final r in _received) {
         total += r[1] as int;
       }
-      final span = max(50.0, _lastArrivalMs - (_received.first[0] as double));
+      final covered = _lastArrivalMs - (_received.first[0] as double);
+      final span = covered > _receiveWindowMs - 200 ? _receiveWindowMs : max(250.0, covered);
       receiveBps = (total * 8000 / span).toInt();
     }
     // Trend line through the recent samples: its slope is the signal.
@@ -177,8 +181,16 @@ class BandwidthEstimator {
       target = (0.85 * max(receiveBps, minBps)).toInt();
       if (target < _target) _lastDecreaseBps = target;
       target = min(target, _target);
-    } else if (signal == _Signal.underuse || limitedByApp) {
+    } else if (signal == _Signal.underuse) {
       state = 'hold';
+    } else if (limitedByApp) {
+      // The source sends less than the target (a simple picture, or an
+      // encoder under its rate): the target creeps up, bounded by twice what
+      // flows, so a source that then has more to send (a bigger picture)
+      // finds room, and a still screen asks for nothing.
+      state = 'hold';
+      final bound = 2 * max(sendBps, receiveBps) + minBps;
+      if (target < bound) target = min(bound, (target * pow(1.02, seconds * 10)).toInt()).toInt();
     } else {
       state = 'increase';
       // Once the path has shown where it gives way, growth is gentle around
