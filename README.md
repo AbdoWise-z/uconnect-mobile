@@ -33,8 +33,9 @@
   special rules an **exception** to apply only those, for example to give it
   less than the defaults.
 
-  Rules are per topic, and a device can copy another device's rules for quick
-  setup on a trusted network.
+  Rules are per topic, and a device can copy another device's network rules
+  for quick setup on a trusted network; the list shows each device's
+  fingerprint, since names can be copied.
 - **Storage, both ways.** Browse, download and upload files in the folders
   your computers share, and share folders from the phone, with read-only
   shares. Downloads resume and every file is checked against its SHA-256.
@@ -49,6 +50,10 @@
   enable.
 - **Stays connected.** A foreground service keeps the session alive in the
   background, and ends it cleanly when the app closes.
+- **Searchable settings.** The search field at the top of Settings finds
+  single settings, says where each is, and opens its page pointing at it.
+  How the phone watches other devices (the viewing quality) has its own
+  page, Use other devices › Watching.
 - **Color schemes.** Follow system, Dark, Darker, Light or Colorful.
 
 ### Screenshots
