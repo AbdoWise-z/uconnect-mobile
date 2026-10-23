@@ -48,8 +48,12 @@
   unless that device's rules allow it without asking. A computer can control
   the phone (taps, swipes, typing) through the accessibility service you
   enable. You choose the resolution, frame rate (up to 120 fps, 60 by
-  default) and bitrate you receive; pictures play back at the pace they were
-  captured after a short buffer, and a statistics overlay shows how both
+  default) and bitrate you receive. Video travels the way real-time services
+  send it (paced packets with repair, repeats within a round trip, a
+  bandwidth estimate the encoder follows, a quality ladder for thin paths),
+  so sharing over mobile data stays within a fraction of a second; pictures
+  play back at the pace they were captured after a buffer that follows the
+  network (or one you choose), and a statistics overlay shows how both
   devices keep up. Sharing has its own limits in Settings.
 - **Stays connected.** A foreground service keeps the session alive in the
   background, and ends it cleanly when the app closes.
