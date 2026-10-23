@@ -94,7 +94,13 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "start" -> {
                         val text = call.argument<String>("text") ?: "Connected"
-                        UconnectService.start(applicationContext, text)
+                        // Refused once the day's dataSync allowance is used up
+                        // (Android 15): the session still runs in the foreground.
+                        try {
+                            UconnectService.start(applicationContext, text)
+                        } catch (e: IllegalStateException) {
+                            android.util.Log.w("uconnect", "background service refused: ${e.message}")
+                        }
                         result.success(null)
                     }
                     "stop" -> {

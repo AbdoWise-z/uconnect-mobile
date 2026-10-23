@@ -9,9 +9,11 @@ import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show debugPrint;
+
 import '../permissions.dart';
 import '../session.dart';
-import '../../uconnect/uconnect.dart' show ucPathDirect, ucPathRelayed;
+import '../../uconnect/uconnect.dart' show ucPathDirect, ucPathRelayed, ucPathTcp;
 import 'remote_input.dart';
 import 'screen_capture.dart';
 import 'stream_control.dart';
@@ -80,6 +82,7 @@ class ScreenHost {
   BitrateControl _rate = BitrateControl(bitrate: 8000000, cap: 16000000);
   // A UDP path that loses too much: the stream moves to TCP (7.2).
   final _lossy = LossyPath();
+  static const tcpBitrateCap = 2000000;
   bool _overTcp = false;
   int get _bitrate => _rate.bitrate;
 
@@ -476,9 +479,12 @@ class ScreenHost {
     return dg;
   }
 
+  int _sentSinceReport = 0; // datagrams, for the viewer's next report
   bool _send(String dev, Uint8List dg) {
     // Best effort; the viewer nacks anything the path dropped.
-    return session.node?.sendDatagram(session.topicId, dev, dg) ?? false;
+    final ok = session.node?.sendDatagram(session.topicId, dev, dg) ?? false;
+    if (ok) _sentSinceReport++;
+    return ok;
   }
 
   void _remember(int seq, List<Uint8List> datagrams) {
@@ -512,17 +518,27 @@ class ScreenHost {
   // Rate control (7.2, BitrateControl): loss and rising delay ease it down,
   // clean reports raise it.
   void _onReport(Map<String, Object?> msg) {
-    final received = _intf(msg, 'received'), lost = _intf(msg, 'lost');
+    final received = _intf(msg, 'received');
+    var lost = _intf(msg, 'lost');
+    // Nothing at all arrived of what was sent: all of it is lost (the viewer
+    // cannot count frames it never saw a piece of).
+    if (received == 0 && lost == 0 && _sentSinceReport > 0) lost = _sentSinceReport;
+    _sentSinceReport = 0;
     // UDP losing much of the stream for seconds (a mobile uplink policing
-    // it): send over TCP from now on, late rather than lost, and start the
-    // bitrate over from where a relayed path would.
+    // it): send over TCP from now on, late rather than lost, at a lower
+    // bitrate.
     final dev = _viewer;
     if (!_overTcp && dev != null && _lossy.report(received: received, lost: lost)) {
       final path = session.node?.datagramPath(session.topicId, dev) ?? 0;
       if ((path == ucPathDirect || path == ucPathRelayed) &&
           (session.node?.sendDatagramsOverTcp(session.topicId, dev) ?? false)) {
         _overTcp = true;
-        _rate = BitrateControl(bitrate: min(_rate.cap, max(_rate.bitrate, 1500000)), cap: _rate.cap);
+        _pacer.stuckMs = 1000;
+        debugPrint('[screen host] UDP loses too much: sending over TCP from now on');
+        // TCP reports no loss and a queue builds unseen on a mostly still
+        // screen: stay well under what such an uplink carries.
+        final cap = min(_rate.cap, tcpBitrateCap);
+        _rate = BitrateControl(bitrate: min(cap, 1000000), cap: cap);
         capture.setBitrate(_bitrate);
         _keyframe();
         return;
@@ -541,6 +557,10 @@ class ScreenHost {
     if (dev == null || state != HostState.sharing) return;
     final now = _clock.elapsedMilliseconds;
     final span = max(1, now - _statsAt);
+    // Over TCP (chosen, or the channel's own fallback) the transport only
+    // pushes back for a while: hold frames longer before dropping them.
+    final overTcp = _overTcp || (session.node?.datagramPath(session.topicId, dev) ?? 0) == ucPathTcp;
+    if (overTcp) _pacer.stuckMs = 1000;
     session.sendControl(dev, {
       't': '$prefix.stats',
       'session': _session,
@@ -550,6 +570,7 @@ class ScreenHost {
       'targetFps': _fps,
       'width': _width,
       'senderDrops': _pacer.dropped,
+      'transport': overTcp ? 'tcp' : 'udp',
       'pipeline': 'Android MediaCodec',
     });
     _statsAt = now;

@@ -25,7 +25,14 @@ class UconnectService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val text = intent?.getStringExtra(EXTRA_TEXT) ?: "Connected"
-        startForegroundCompat(text)
+        try {
+            startForegroundCompat(text)
+        } catch (e: IllegalStateException) {
+            // Not allowed now (the day's dataSync time is used up): no
+            // background keep-alive, but no crash either.
+            stopSelf()
+            return START_NOT_STICKY
+        }
         // Sticky: if the system kills us under pressure, recreate the service
         // (Dart re-establishes the session on resume).
         return START_STICKY
@@ -47,6 +54,19 @@ class UconnectService : Service() {
         }
         stopSelf()
         android.os.Process.killProcess(android.os.Process.myPid())
+    }
+
+    // Android 15 allows a dataSync foreground service six hours a day; when
+    // they run out it calls this, and a service still running a few seconds
+    // later crashes the app. Stop: the session keeps running while the app is
+    // in the foreground, it just is no longer kept alive in the background.
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION") stopForeground(true)
+        }
+        stopSelf()
     }
 
     private fun startForegroundCompat(text: String) {

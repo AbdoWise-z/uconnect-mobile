@@ -171,12 +171,18 @@ class CameraCapturer(
         try {
             buildEncoder(size)
         } catch (e: Throwable) {
-            channel.invokeMethod("error", e.message ?: "camera encoder failed")
+            report(e.message ?: "camera encoder failed")
             stop(); result.success(mapOf("width" to 0, "height" to 0)); return
         }
 
+        // The camera's callbacks run on its own thread; Flutter takes replies
+        // and messages on the main thread only.
         var answered = false
-        fun answer(w: Int, hgt: Int) { if (!answered) { answered = true; result.success(mapOf("width" to w, "height" to hgt)) } }
+        fun answer(w: Int, hgt: Int) {
+            activity.runOnUiThread {
+                if (!answered) { answered = true; result.success(mapOf("width" to w, "height" to hgt)) }
+            }
+        }
 
         try {
             manager.openCamera(id, object : CameraDevice.StateCallback() {
@@ -198,30 +204,30 @@ class CameraCapturer(
                                         session.setRepeatingRequest(builder.build(), null, h)
                                         answer(size.width, size.height)
                                     } catch (e: Throwable) {
-                                        channel.invokeMethod("error", e.message ?: "camera request failed")
+                                        report(e.message ?: "camera request failed")
                                         answer(0, 0)
                                     }
                                 }
                                 override fun onConfigureFailed(session: CameraCaptureSession) {
-                                    channel.invokeMethod("error", "camera session failed")
+                                    report("camera session failed")
                                     answer(0, 0)
                                 }
                             }, h)
                     } catch (e: Throwable) {
-                        channel.invokeMethod("error", e.message ?: "camera session error")
+                        report(e.message ?: "camera session error")
                         answer(0, 0)
                     }
                 }
                 override fun onDisconnected(cam: CameraDevice) { cam.close(); if (device == cam) device = null }
                 override fun onError(cam: CameraDevice, error: Int) {
-                    channel.invokeMethod("error", "camera error $error")
+                    report("camera error $error")
                     cam.close(); answer(0, 0)
                 }
             }, h)
         } catch (e: SecurityException) {
             answer(0, 0)
         } catch (e: Throwable) {
-            channel.invokeMethod("error", e.message ?: "openCamera failed")
+            report(e.message ?: "openCamera failed")
             answer(0, 0)
         }
     }
@@ -284,6 +290,12 @@ class CameraCapturer(
             activity.runOnUiThread { sink?.error("encoder", e.message, null) }
         }
         override fun onOutputFormatChanged(mc: MediaCodec, format: MediaFormat) {}
+    }
+
+    // Tells Dart about a failure, from whichever thread it happened on.
+    private fun report(message: String) {
+        android.util.Log.w("uconnect-camera", message)
+        activity.runOnUiThread { channel.invokeMethod("error", message) }
     }
 
     private fun emit(au: ByteArray, keyframe: Boolean, ptsUs: Long) {

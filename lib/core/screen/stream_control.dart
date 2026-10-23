@@ -102,6 +102,10 @@ class PacedSender {
 
   final _queue = <_PacedFrame>[];
   int dropped = 0;
+  /// How long a frame may be held up by the transport refusing it before it
+  /// is dropped (at least four frame intervals). Longer over TCP, which only
+  /// pushes back for a while and loses nothing.
+  int stuckMs = 150;
   int _intervalMs = 33;
 
   bool get idle => _queue.isEmpty;
@@ -134,7 +138,7 @@ class PacedSender {
     // Stuck, not just waiting its turn: frames behind a keyframe that is
     // still being spread out are not stale; one that could have gone out
     // for a while (the transport refusing it) is.
-    final budget = max(150, _intervalMs * 4);
+    final budget = max(stuckMs, _intervalMs * 4);
     final first = _queue.first;
     if (nowMs - first.start > budget + (first.due - first.start)) {
       dropped += _queue.length;
