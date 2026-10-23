@@ -23,6 +23,27 @@ class _ConnectPageState extends State<ConnectPage> {
   bool _busy = false;
 
   @override
+  void initState() {
+    super.initState();
+    _takeInvite();
+  }
+
+  @override
+  void didUpdateWidget(ConnectPage old) {
+    super.didUpdateWidget(old);
+    _takeInvite();
+  }
+
+  // A scanned invite that opened the app before a server was set: fill it in.
+  void _takeInvite() {
+    final link = widget.state.takePendingInvite();
+    if (link != null) {
+      _link.text = link;
+      _error = '';
+    }
+  }
+
+  @override
   void dispose() {
     _server.dispose();
     _link.dispose();

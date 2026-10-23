@@ -31,8 +31,49 @@ class MainActivity : FlutterActivity() {
     private var screenCapturer: ScreenCapturer? = null
     private var cameraCapturer: CameraCapturer? = null
 
+    // uconn:// invite links (from a scanned QR code or a tapped link). The one
+    // that launched or reached the app waits here until Dart has taken it.
+    private var linkChannel: MethodChannel? = null
+    private var pendingLink: String? = null
+
+    private fun uconnLink(intent: Intent?): String? {
+        val data = intent?.dataString ?: return null
+        return if (intent.action == Intent.ACTION_VIEW &&
+            data.startsWith("uconn://", ignoreCase = true)
+        ) data else null
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val link = uconnLink(intent) ?: return
+        pendingLink = link
+        linkChannel?.invokeMethod("link", link, object : MethodChannel.Result {
+            override fun success(result: Any?) {
+                if (pendingLink == link) pendingLink = null
+            }
+            override fun error(code: String, message: String?, details: Any?) {}
+            override fun notImplemented() {}
+        })
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // Invite links: Dart asks for the one the app was opened with, and is
+        // told about later ones as they arrive (lib/app/invite_links.dart).
+        if (pendingLink == null) pendingLink = uconnLink(intent)
+        linkChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "uconnect/link")
+            .also { channel ->
+                channel.setMethodCallHandler { call, result ->
+                    when (call.method) {
+                        "initial" -> {
+                            result.success(pendingLink)
+                            pendingLink = null
+                        }
+                        else -> result.notImplemented()
+                    }
+                }
+            }
         // Decodes a shared screen's H.264 into a Flutter texture (watching).
         screenDecoder = ScreenDecoder(
             flutterEngine.dartExecutor.binaryMessenger,

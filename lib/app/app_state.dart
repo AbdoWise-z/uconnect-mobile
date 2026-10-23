@@ -21,6 +21,7 @@ import '../core/wire.dart';
 import '../uconnect/uconnect.dart';
 import '../ui/theme.dart';
 import 'background.dart';
+import 'invite_links.dart';
 import 'store.dart';
 
 class AppState extends ChangeNotifier {
@@ -108,6 +109,80 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     if (store.server.isNotEmpty && store.topicUri.isNotEmpty) {
       unawaited(connect());
+    }
+    unawaited(_inviteLinks.start());
+  }
+
+  // --- invite links (QR codes / uconn:// links opening the app) --------------
+
+  late final _inviteLinks = InviteLinks((link) => unawaited(_onInviteLink(link)));
+
+  /// An invite link that arrived before the rendezvous server was set: the
+  /// connect page fills it in (see takePendingInvite).
+  String? _pendingInvite;
+
+  String? takePendingInvite() {
+    final link = _pendingInvite;
+    _pendingInvite = null;
+    return link;
+  }
+
+  void _tell(String text) {
+    final context = navigatorKey.currentContext;
+    if (context == null) return;
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  Future<void> _onInviteLink(String raw) async {
+    final link = raw.trim();
+    final creds = TopicCreds.parse(link);
+    if (creds == null) {
+      _tell('That is not a valid uConnect invite link.');
+      return;
+    }
+    final current = TopicCreds.parse(store.topicUri);
+    if (current != null && current.idHex == creds.idHex && store.topicUri == link) {
+      _tell('You are already in this topic.');
+      return;
+    }
+    // First run: no server yet, so the link alone cannot connect. Hand it to
+    // the connect page, which asks for the server.
+    if (store.server.isEmpty) {
+      _pendingInvite = link;
+      notifyListeners();
+      return;
+    }
+    if (store.topicUri.isNotEmpty) {
+      final context = navigatorKey.currentContext;
+      if (context == null) return;
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Join this topic?'),
+          content: Text(
+            'Topic ${creds.idHex.substring(0, 8)} from the scanned invite. '
+            'This phone leaves the topic it is in now.',
+            style: TextStyle(color: UcColors.text),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Join'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    await saveSettings(topicUri: link);
+    await connect();
+    if (startError.isEmpty) {
+      _tell('Joined topic ${creds.idHex.substring(0, 8)}.');
     }
   }
 

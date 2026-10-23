@@ -71,5 +71,16 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>dev.uconnect.invite</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>uconn</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>
