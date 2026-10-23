@@ -50,7 +50,8 @@ class MediaPacket {
   });
   final int kind;
   final PacketType type;
-  final int session, seq, frame, frag, count, captureMs;
+  final int session, frame, frag, count, captureMs;
+  int seq; // given when the packet is sent, so the numbers have no gaps
   final bool keyframe;
   bool retransmit;
   final Uint8List payload;

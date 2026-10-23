@@ -197,16 +197,14 @@ class ScreenCapturer(
         }
     }
 
-    // (Re)creates the encoder, its input surface and the mirroring virtual
-    // display at the given size, keeping the existing MediaProjection.
+    // (Re)creates the encoder and its input surface at the given size and
+    // points the mirroring virtual display at it. The display is created once
+    // per projection (a projection can only ever create one: a second attempt
+    // ends the capture) and afterwards resized and given the new surface.
     private fun buildEncoderAndDisplay(dim: Dim) {
-        virtualDisplay?.release()
-        virtualDisplay = null
-        try {
-            codec?.stop(); codec?.release()
-        } catch (_: Throwable) {
-        }
-        inputSurface?.release()
+        val oldCodec = codec
+        val oldSurface = inputSurface
+        codec = null
         codecConfig = null
 
         val format = MediaFormat.createVideoFormat(
@@ -242,15 +240,28 @@ class ScreenCapturer(
         val c = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
         c.setCallback(encoderCallback)
         c.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        inputSurface = c.createInputSurface()
+        val surface = c.createInputSurface()
         c.start()
+        inputSurface = surface
         codec = c
 
-        virtualDisplay = projection?.createVirtualDisplay(
-            "uconnect-screen", dim.width, dim.height, dim.dpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            inputSurface, null, main
-        )
+        val display = virtualDisplay
+        if (display == null) {
+            virtualDisplay = projection?.createVirtualDisplay(
+                "uconnect-screen", dim.width, dim.height, dim.dpi,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                surface, null, main
+            )
+        } else {
+            display.setSurface(surface)
+            display.resize(dim.width, dim.height, dim.dpi)
+        }
+        // The old encoder goes once the display has moved off its surface.
+        try {
+            oldCodec?.stop(); oldCodec?.release()
+        } catch (_: Throwable) {
+        }
+        oldSurface?.release()
     }
 
     // The screen rotated (or its size changed): rebuild at the new dimensions
@@ -328,6 +339,7 @@ class ScreenCapturer(
     }
 
     private fun setBitrate(bitrate: Int) {
+        capBitrate = bitrate // a rebuilt encoder starts from the current rate
         val c = codec ?: return
         val b = Bundle()
         b.putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, bitrate)

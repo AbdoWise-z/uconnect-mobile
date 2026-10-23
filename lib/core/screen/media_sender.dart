@@ -90,11 +90,13 @@ class MediaSender {
     // two fragments when it loses a lot, one per fragment (each sent twice,
     // in effect) when it loses most of a spell.
     final loss = max(_bwe.lossRate, _bwe.burstLossRate);
-    fecGroup = reliable || loss < 0.02 ? 0 : loss < 0.08 ? 8 : loss < 0.20 ? 4 : loss < 0.40 ? 2 : 1;
+    fecGroup = reliable || loss < 0.02 ? 0 : loss < 0.08 ? 8 : loss < 0.20 ? 4 : loss < 0.45 ? 2 : 1;
     // A keyframe is big and everything after it depends on it: protected
     // more, so it needs fewer repeats.
     final group = frame.keyframe && fecGroup > 2 ? 2 : fecGroup;
-    final packets = packetize(kind, frame, _seq, group);
+    // Sequence numbers are given as packets leave (pump): a queue dropped
+    // before it was sent must not read as loss at the receiver.
+    final packets = packetize(kind, frame, SeqCounter(), group);
     if (packets.isEmpty) {
       dropped++;
       return false;
@@ -113,9 +115,14 @@ class MediaSender {
   bool shouldSkipCapture() {
     final target = _bwe.targetBps;
     if (queuedBytes > target * queueMs ~/ 8000) return true;
-    if (reliable && inflightBytes > target * inflightMs ~/ 8000) return true;
+    if (reliable && inflightBytes > _inflightLimit) return true;
     return false;
   }
+
+  /// Over a reliable path what is unacknowledged is what waits in the socket
+  /// and the network: bounded, or the lag grows unseen. At least a round trip
+  /// and a half of it, though, or a long path could never carry the rate.
+  int get _inflightLimit => _bwe.targetBps * max(inflightMs, (1.5 * rttMs).round()) ~/ 8000;
 
   /// Sends what the pacing budget allows; call every few milliseconds.
   /// Returns false if the transport refused a packet (try again soon).
@@ -126,14 +133,13 @@ class MediaSender {
     if (_lastPumpMs != 0) _budgetBytes = min(_budgetBytes + rate * (nowMs - _lastPumpMs), _maxBurstBytes + rate * 5);
     _lastPumpMs = nowMs;
     _trimSent(nowMs);
-    // Over a reliable path what is unacknowledged is what waits in the
-    // socket and the network: bounded, or the lag grows unseen.
-    final inflightLimit = _bwe.targetBps * inflightMs ~/ 8000;
+    final inflightLimit = _inflightLimit;
     while (_queue.isNotEmpty) {
       final p = _queue.first;
       final size = p.size;
       if (_budgetBytes < size) break;
       if (reliable && inflightBytes + size > inflightLimit) break;
+      if (!p.retransmit) p.seq = _seq.take(); // a repeat keeps the number the receiver asked for
       final bytes = encodeMedia(p);
       if (!send(bytes)) return false; // refused for now (the path is still opening, or TCP pushes back)
       _budgetBytes -= size;

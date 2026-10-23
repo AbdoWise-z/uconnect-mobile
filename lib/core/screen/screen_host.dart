@@ -464,21 +464,27 @@ class ScreenHost {
   // not a slow path.
   static const _rungs = [3840, 2560, 1920, 1280, 854];
   static const _needs = [8000000, 4000000, 2000000, 800000, 0]; // at 30 fps
+  static const _fpsRungs = [30, 15, 10];
+  static const _fpsUnder = [1000000, 250000, 150000]; // the rate under which each rung applies
+
+  int _qualityChangedMs = -100000;
 
   void _adaptQuality(MediaSender media) {
     if (_resizing || !_canResize) return;
+    // A change costs a keyframe and takes a moment to show in the rates:
+    // one at a time, a second and a half apart.
+    if (_clock.elapsedMilliseconds - _qualityChangedMs < 1500) return;
     final bps = media.encoderBps;
     final atFps = (_maxFps / 30).clamp(0.5, 4.0);
     final down = media.pathLimited && !media.applicationLimited;
-    // Frame rate first: under about half a megabit even the smallest picture
-    // needs fewer frames to stay clean.
+    // Frame rate: under about a megabit the smallest picture at 60 fps is a
+    // blur, at 30 it is legible; only under a quarter of that do fewer frames
+    // still help. Back up a rung only with a third more than it took to come
+    // down, so the rate does not flap.
     var fps = _maxFps;
-    if (down && bps < 250000) {
-      fps = min(fps, 10);
-    } else if (down && (bps < 400000 || (_fps <= 15 && bps < 520000))) {
-      fps = min(fps, 15);
-    } else if (!down && _fps < _maxFps && bps < 520000) {
-      fps = _fps; // no room yet to go back up
+    for (var i = 0; i < 3; i++) {
+      final at = _fps <= _fpsRungs[i];
+      if ((down && bps < _fpsUnder[i]) || (at && bps < _fpsUnder[i] * 1.3)) fps = min(fps, _fpsRungs[i]);
     }
     var width = _askWidth;
     var rung = 0;
@@ -514,6 +520,7 @@ class ScreenHost {
       _askWidth = width;
       _fps = fps;
       media.fps = fps;
+      _qualityChangedMs = _clock.elapsedMilliseconds;
       _width = size.width.toInt();
       _height = size.height.toInt();
       _notify();

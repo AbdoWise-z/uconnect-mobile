@@ -133,10 +133,10 @@ class BandwidthEstimator {
     trendMs = _deltas * slope * _trendGain;
     final dt = _lastUpdateMs != 0 ? (nowMs - _lastUpdateMs).toDouble() : 100.0;
     _lastUpdateMs = nowMs;
-    // The worst recent spell, halving every second; a handful of packets
-    // is too few to call a spell.
-    burstLossRate *= pow(0.5, dt / 1000);
-    if (got + lost >= 5) burstLossRate = max(burstLossRate, lost / (got + lost));
+    // The worst recent spell, halving every half second; a handful of
+    // packets is too few to call a spell.
+    burstLossRate *= pow(0.5, dt / 500);
+    if (got + lost >= 10) burstLossRate = max(burstLossRate, lost / (got + lost));
     var signal = _detect(trendMs, dt);
     if (signal == _Signal.overuse) {
       if (_overusingSinceMs < 0) _overusingSinceMs = nowMs;
@@ -188,7 +188,9 @@ class BandwidthEstimator {
     // the path losing at random (a mobile uplink): no rate helps that, repair
     // packets and repeats carry the stream across it.
     if (rttMs > 0) _minRttMs = _minRttMs > 0 ? min(_minRttMs, rttMs) : rttMs;
-    final queueing = trendMs > 0 || (_minRttMs > 0 && rttMs > 1.3 * _minRttMs + 10);
+    // A cellular link's round trip wanders by tens of milliseconds and its
+    // delay trend is seldom exactly flat: only a clear rise counts.
+    final queueing = trendMs > _threshold / 2 || (_minRttMs > 0 && rttMs > 1.5 * _minRttMs + 30);
     if (lossRate > 0.10 && !limitedByApp && queueing && receiveBps > 0 && nowMs - _lastLossCutMs >= max(300, 3 * rttMs)) {
       target = min(target, (_target * (1 - 0.5 * min(lossRate, 0.5))).toInt());
       _lastLossCutMs = nowMs;
