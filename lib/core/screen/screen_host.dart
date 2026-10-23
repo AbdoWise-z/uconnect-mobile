@@ -176,6 +176,12 @@ class ScreenHost {
     // Codec check.
     final codecs = msg['codecs'];
     if (codecs is List && !codecs.contains('h264')) return err('codec');
+    // The current viewer asking again (a quality change, a retry) replaces its
+    // own session instead of being refused as busy. Its stop usually arrives
+    // just before and starts a teardown that is still running; wait for it.
+    if (state == HostState.sharing && dev == _viewer) _teardown();
+    final stopping = _stopping;
+    if (stopping != null) await stopping;
     // Only one viewer at a time.
     if (state == HostState.sharing) return err('busy');
     // The peer must have proven identity and hold the view permission here.
@@ -345,7 +351,8 @@ class ScreenHost {
       bitrate: _bitrate,
     );
     if (size.width == 0 || _viewer != dev || state != HostState.sharing) {
-      await _teardownAsync();
+      _teardown();
+      await _stopping;
       return;
     }
     _width = size.width.toInt();
@@ -473,11 +480,16 @@ class ScreenHost {
     if (dev != null && _session != 0) {
       session.sendControl(dev, {'t': '$prefix.stop', 'session': _session});
     }
-    await _teardownAsync();
+    _teardown();
+    await _stopping;
   }
 
+  // The teardown in progress, if any. It is async (closing the camera or the
+  // capture takes a moment), so a request arriving meanwhile awaits it.
+  Future<void>? _stopping;
+
   void _teardown() {
-    unawaited(_teardownAsync());
+    _stopping ??= _teardownAsync().whenComplete(() => _stopping = null);
   }
 
   Future<void> _teardownAsync() async {
@@ -504,7 +516,8 @@ class ScreenHost {
 
   Future<void> dispose() async {
     session.removeControlHandler(_onControl);
-    await _teardownAsync();
+    _teardown();
+    await _stopping;
     await _changed.close();
   }
 }
