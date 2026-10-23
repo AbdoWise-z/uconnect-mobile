@@ -3,6 +3,7 @@
 // viewer's measure of how delay varies.
 
 import 'dart:math';
+import 'dart:typed_data';
 
 /// The sender's bitrate: eased down a fifth on loss or rising delay (at most
 /// once per few reports, so one bad patch is not punished repeatedly) and
@@ -60,4 +61,80 @@ class DelayMeter {
     _previous = null;
     jitterMs = trendMs = 0;
   }
+}
+
+/// Sends each frame's datagrams spread over part of a frame interval instead
+/// of in one burst (docs/protocol.md 7.2, as the desktop's PacedSender): a
+/// keyframe sent all at once overflows socket buffers and the path, and every
+/// datagram lost there costs the whole frame. A datagram the transport refuses
+/// is retried on the next pump. Frames too old to be worth showing are dropped
+/// with every frame behind them (they depend on it); the caller then asks the
+/// encoder for a keyframe.
+class PacedSender {
+  static const maxQueuedFrames = 3;
+
+  final _queue = <_PacedFrame>[];
+  int dropped = 0;
+  int _intervalMs = 33;
+
+  bool get idle => _queue.isEmpty;
+
+  /// Queues one frame's datagrams. False if the queue is full: the frame is
+  /// dropped, and the caller should ask for a keyframe.
+  bool add(List<Uint8List> packets, int nowMs,
+      {required int intervalMs, int paceBps = 0, int maxSpreadMs = 60}) {
+    if (_queue.length >= maxQueuedFrames) {
+      dropped++;
+      return false;
+    }
+    if (packets.isEmpty) return true;
+    _intervalMs = intervalMs.clamp(4, 1000);
+    final start = _queue.isEmpty ? nowMs : max(nowMs, _queue.last.due);
+    var duration = max(4, _intervalMs ~/ 2);
+    // A big frame (a keyframe) no faster than paceBps, within maxSpreadMs.
+    if (paceBps > 0) {
+      final bytes = packets.fold<int>(0, (n, p) => n + p.length);
+      duration = max(duration, min(maxSpreadMs, bytes * 8000 ~/ paceBps));
+    }
+    _queue.add(_PacedFrame(packets, nowMs, start, start + duration));
+    return true;
+  }
+
+  /// Sends what is due by [nowMs]. False if stale frames were dropped (the
+  /// caller should ask for a keyframe).
+  bool pump(int nowMs, bool Function(Uint8List) send) {
+    if (_queue.isEmpty) return true;
+    // Late past its own spread (a keyframe's can be long), not just old.
+    final budget = max(150, _intervalMs * 4);
+    final first = _queue.first;
+    if (nowMs - first.enqueued > budget + (first.due - first.start)) {
+      dropped += _queue.length;
+      _queue.clear();
+      return false;
+    }
+    while (_queue.isNotEmpty) {
+      final f = _queue.first;
+      if (nowMs < f.start) break;
+      final size = f.packets.length;
+      final span = max(1, f.due - f.start);
+      // How many should be out by now; the first few go at once.
+      final target = min(size, max(min(4, size), (size * (nowMs - f.start) + span - 1) ~/ span));
+      while (f.next < target) {
+        if (!send(f.packets[f.next])) return true; // refused for now: retry next pump
+        f.next++;
+      }
+      if (f.next < size) break;
+      _queue.removeAt(0);
+    }
+    return true;
+  }
+
+  void clear() => _queue.clear();
+}
+
+class _PacedFrame {
+  _PacedFrame(this.packets, this.enqueued, this.start, this.due);
+  final List<Uint8List> packets;
+  final int enqueued, start, due;
+  int next = 0;
 }

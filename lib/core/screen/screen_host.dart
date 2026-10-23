@@ -80,6 +80,11 @@ class ScreenHost {
   BitrateControl _rate = BitrateControl(bitrate: 8000000, cap: 16000000);
   int get _bitrate => _rate.bitrate;
 
+  // Each frame's datagrams go out spread over part of a frame interval, not
+  // in one burst (7.2); _pumpTimer runs while some are waiting.
+  PacedSender _pacer = PacedSender();
+  Timer? _pumpTimer;
+
   // Per-second statistics for the viewer ($prefix.stats).
   final _clock = Stopwatch()..start();
   Timer? _statsTimer;
@@ -225,9 +230,11 @@ class ScreenHost {
     final asked = _intf(msg, 'maxBitrate');
     final allowed = maxBitrateCap > 0 ? maxBitrateCap : 16000000;
     final cap = asked > 0 ? min(allowed, max(asked, BitrateControl.minBitrate)) : allowed;
-    // Direct links start higher; relay/TCP lower (7.2).
+    // Direct links start higher; relay/TCP lower (7.2). A phone's uplink
+    // (often cellular) takes less than a desktop's: it starts at half of a
+    // desktop's and climbs while reports stay clean.
     final path = session.node?.datagramPath(session.topicId, dev) ?? 0;
-    _rate = BitrateControl(bitrate: min(cap, path == ucPathDirect ? 8000000 : 3000000), cap: cap);
+    _rate = BitrateControl(bitrate: min(cap, path == ucPathDirect ? 4000000 : 1500000), cap: cap);
 
     // The sources on offer (cameras); the viewer gets this list and may switch.
     final sources = await capture.sources();
@@ -235,9 +242,12 @@ class ScreenHost {
     _monitor = (wantMonitor >= 0 && wantMonitor < sources.length) ? wantMonitor : 0;
     if (sources.isNotEmpty) capture.selectSource(_monitor);
 
+    // The size asked for bounds the long side: a portrait phone screen
+    // (1220x2712) asked for at "1080p" is sent at most 1920 tall. Full size,
+    // its keyframes are too big for a phone's uplink.
     final size = await capture.start(
       width: maxWidth,
-      height: maxWidth * 2, // bound by width; the source keeps its own aspect
+      height: maxWidth, // the source keeps its own aspect
       fps: _fps,
       bitrate: _bitrate,
     );
@@ -252,6 +262,7 @@ class ScreenHost {
     _request = request;
     _session = 1 + _rand.nextInt(0xFFFE); // nonzero u16
     _seq = 0;
+    _pacer = PacedSender();
     state = HostState.sharing;
     _controlOn = false;
     _history.clear();
@@ -407,9 +418,27 @@ class ScreenHost {
       final dg = _packet(seq, i, count, u.keyframe, false, ts,
           Uint8List.sublistView(u.bytes, start, end));
       datagrams.add(dg);
-      _send(dev, dg);
     }
     _remember(seq, datagrams);
+    // A frame that cannot be queued is lost: the next must be a keyframe.
+    if (!_pacer.add(datagrams, _clock.elapsedMilliseconds,
+        intervalMs: 1000 ~/ max(1, _fps), paceBps: 2 * _bitrate, maxSpreadMs: 200)) {
+      capture.requestKeyframe();
+    }
+    _pump();
+  }
+
+  // Sends what is due, and comes back in a couple of milliseconds while
+  // datagrams are still waiting.
+  void _pump() {
+    _pumpTimer?.cancel();
+    _pumpTimer = null;
+    final dev = _viewer;
+    if (dev == null || state != HostState.sharing) return;
+    if (!_pacer.pump(_clock.elapsedMilliseconds, (dg) => _send(dev, dg))) {
+      capture.requestKeyframe(); // stale frames were dropped
+    }
+    if (!_pacer.idle) _pumpTimer = Timer(const Duration(milliseconds: 2), _pump);
   }
 
   Uint8List _packet(int seq, int index, int count, bool keyframe,
@@ -484,6 +513,7 @@ class ScreenHost {
       'targetKbps': _bitrate ~/ 1000,
       'targetFps': _fps,
       'width': _width,
+      'senderDrops': _pacer.dropped,
       'pipeline': 'Android MediaCodec',
     });
     _statsAt = now;
@@ -511,6 +541,9 @@ class ScreenHost {
   Future<void> _teardownAsync() async {
     _statsTimer?.cancel();
     _statsTimer = null;
+    _pumpTimer?.cancel();
+    _pumpTimer = null;
+    _pacer.clear();
     await _auSub?.cancel();
     _auSub = null;
     if (_controlOn) {

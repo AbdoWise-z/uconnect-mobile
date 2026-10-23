@@ -1,5 +1,7 @@
 // The streaming feedback loop: the sender's bitrate control and the
 // viewer's delay measure (lib/core/screen/stream_control.dart).
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:uconnect_mobile/core/screen/stream_control.dart';
 
@@ -52,5 +54,51 @@ void main() {
     meter.frame(0xFFFFFFF0, 100);
     meter.frame(0x00000000, 116); // wrapped; transit unchanged
     expect(meter.trendMs, 0);
+  });
+
+  List<Uint8List> packets(int n) => [for (var i = 0; i < n; i++) Uint8List.fromList([i])];
+
+  test('paced sender spreads a frame over half an interval, a few at once', () {
+    final pacer = PacedSender();
+    final sent = <int>[];
+    expect(pacer.add(packets(40), 0, intervalMs: 20), isTrue); // over 10 ms
+    bool send(Uint8List p) {
+      sent.add(p[0]);
+      return true;
+    }
+
+    pacer.pump(0, send);
+    expect(sent.length, 4);
+    pacer.pump(5, send);
+    expect(sent.length, 20);
+    pacer.pump(10, send);
+    expect(sent, [for (var i = 0; i < 40; i++) i]); // all, in order
+    expect(pacer.idle, isTrue);
+  });
+
+  test('paced sender retries refusals, drops stale frames and a full queue', () {
+    final pacer = PacedSender();
+    pacer.add(packets(4), 0, intervalMs: 33);
+    var refuse = true;
+    final sent = <int>[];
+    bool send(Uint8List p) {
+      if (refuse) return false;
+      sent.add(p[0]);
+      return true;
+    }
+
+    expect(pacer.pump(0, send), isTrue);
+    expect(sent, isEmpty); // refused: kept
+    refuse = false;
+    pacer.pump(1, send);
+    expect(sent, [0, 1, 2, 3]);
+
+    for (var i = 0; i < PacedSender.maxQueuedFrames; i++) {
+      expect(pacer.add(packets(2), 100, intervalMs: 33), isTrue);
+    }
+    expect(pacer.add(packets(2), 100, intervalMs: 33), isFalse); // full
+    expect(pacer.pump(100 + 200, (p) => false), isFalse); // too old: dropped
+    expect(pacer.idle, isTrue);
+    expect(pacer.dropped, 1 + PacedSender.maxQueuedFrames);
   });
 }

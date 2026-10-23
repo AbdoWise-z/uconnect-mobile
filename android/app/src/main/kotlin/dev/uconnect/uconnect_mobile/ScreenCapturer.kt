@@ -198,6 +198,12 @@ class ScreenCapturer(
             setInteger(MediaFormat.KEY_FRAME_RATE, capFps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
             setInteger(MediaFormat.KEY_LATENCY, 1)
+            // A surface encoder takes every frame the screen composes (120 Hz
+            // on some phones), whatever KEY_FRAME_RATE says: cap it at the
+            // rate asked for, or a full-size stream outruns the viewer.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, capFps.toFloat())
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 setInteger(
                     MediaFormat.KEY_BITRATE_MODE,
