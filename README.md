@@ -151,6 +151,23 @@ powershell -File scripts/e2e-android.ps1
 iOS needs the uconnect library built as a static XCFramework and a Mac to
 build on; the Dart side is platform-independent and ready for it.
 
+## Known issues and next up
+
+Where the app stands (updated 2026-10-24):
+
+- **Streaming over mobile data** holds a lag budget of a second: the phone's
+  screen reaches a desktop at 30 fps/480p on a ~1 Mbit/s uplink with 10%
+  loss, and the phone watches a desktop at 60+ fps over its downlink. Media
+  travels over UDP only (direct or relayed); there is no TCP fallback.
+- The phone keeps its connections to desktops alive every 5 s: carrier NATs
+  were found to forget a quiet TCP connection within half a minute.
+- The stream view shows a live line (size, fps, rate, lag), a one-screen
+  quality sheet and self-hiding controls in full screen.
+- **Open:** one viewer at a time when the phone shares; `test/app_smoke_test.dart`
+  hangs (pre-existing); iOS has not been built.
+- **Next up:** bandwidth probing when the encoder has little to send, temporal
+  layering so the frame rate can drop without a resize.
+
 ## License
 
 MIT, like the rest of uConnect. See [LICENSE](LICENSE).
