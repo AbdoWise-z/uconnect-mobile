@@ -51,6 +51,7 @@ class MediaSender {
   int _lastPumpMs = 0;
   final _sent = <int, _Sent>{}; // recent packets by sequence, for repeats and feedback
   double rttMs = 0, lagMs = 0;
+  bool _haveLag = false;
   int _lagSinceMs = -1, _lagCutMs = -100000; // the viewer behind by half the budget: since when, last cut
   int fecGroup = 0;
   int lastSentCaptureMs = 0;
@@ -176,7 +177,10 @@ class MediaSender {
       rttMs = rttMs > 0 ? 0.8 * rttMs + 0.2 * rtt : rtt;
     }
     results.sort((a, b) => a.sendMs.compareTo(b.sendMs));
-    if (results.isNotEmpty) _bwe.onFeedback(results, nowMs, rttMs);
+    // The lag is known once the receiver has had a whole frame; before that
+    // (a keyframe still on its way) the estimator goes by delay alone.
+    if (f.haveLatest) _haveLag = true;
+    if (results.isNotEmpty) _bwe.onFeedback(results, nowMs, rttMs, _haveLag ? lagMs : -1);
     // Repeats: what it still wants, once per 40 ms each, while it is recent.
     for (final seq in f.nacks) {
       final s = _sent[seq];

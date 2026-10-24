@@ -29,6 +29,7 @@ class BandwidthEstimator {
   static const double _overuseHoldMs = 100; // a cellular link delivers in bursts: a sawtooth of delay
   static const double _receiveWindowMs = 1000;
   static const double _maxTargetOverReceived = 1.5;
+  static const int _burstMs = 5; // packets sent this close together are one group
 
   final int minBps, maxBps;
   int _target = 0, receiveBps = 0, sendBps = 0, _lastDecreaseBps = 0;
@@ -45,8 +46,11 @@ class BandwidthEstimator {
   int _deltas = 0;
   double _firstArrivalMs = 0;
   bool _haveSample = false;
-  int _previousSendMs = 0;
+  int _previousSendMs = 0; // the last closed group's
   double _previousArrivalMs = 0;
+  int _groupStartSendMs = 0, _groupSendMs = 0; // the group being gathered
+  double _groupArrivalMs = 0;
+  bool _haveGroup = false;
   final _received = <List<num>>[]; // [arrival, bytes]
   double _lastArrivalMs = 0;
   final _sent = <List<int>>[]; // [send time, bytes]
@@ -78,8 +82,9 @@ class BandwidthEstimator {
     return trend > _threshold ? _Signal.overuse : trend < -_threshold ? _Signal.underuse : _Signal.normal;
   }
 
-  /// [results] in send order; [rttMs] the current round trip, if known.
-  void onFeedback(List<PacketResult> results, int nowMs, double rttMs) {
+  /// [results] in send order; [rttMs] the current round trip, if known;
+  /// [lagMs] how far behind live the receiver is (negative if unknown).
+  void onFeedback(List<PacketResult> results, int nowMs, double rttMs, [double lagMs = 0]) {
     var lost = 0, got = 0;
     for (final r in results) {
       _sent.add([r.sendMs, r.bytes]);
@@ -91,8 +96,9 @@ class BandwidthEstimator {
       got++;
       // The receiver's clock jumped (its reference wrapped or restarted):
       // nothing before compares with what follows.
-      if (_haveSample && (r.arrivalMs - _previousArrivalMs).abs() > 3600000) {
+      if (_haveSample && (r.arrivalMs - _groupArrivalMs).abs() > 3600000) {
         _haveSample = false;
+        _haveGroup = false;
         _samples.clear();
         _deltas = 0;
         _received.clear();
@@ -104,21 +110,36 @@ class BandwidthEstimator {
       if (!_haveSample) {
         _haveSample = true;
         _firstArrivalMs = r.arrivalMs;
-        _previousSendMs = r.sendMs;
-        _previousArrivalMs = r.arrivalMs;
+        _groupStartSendMs = _groupSendMs = r.sendMs;
+        _groupArrivalMs = r.arrivalMs;
+        _haveGroup = false;
         continue;
       }
-      // Arrivals spreading out more than departures: delay is building.
-      final delta = (r.arrivalMs - _previousArrivalMs) - (r.sendMs - _previousSendMs);
-      _previousSendMs = r.sendMs;
-      _previousArrivalMs = r.arrivalMs;
-      _accumulatedDelayMs += delta;
-      _smoothedDelayMs = 0.9 * _smoothedDelayMs + 0.1 * _accumulatedDelayMs;
-      _samples.add([r.arrivalMs - _firstArrivalMs, _smoothedDelayMs]);
-      while (_samples.length > _trendWindow) {
-        _samples.removeAt(0);
+      // Packets sent within a few milliseconds of each other are one group
+      // (a burst leaves together, and a link that delivers in bursts hands
+      // it over together): the delay deltas are between groups, as in GCC,
+      // or every burst reads as delay building and then falling.
+      if (r.sendMs - _groupStartSendMs <= _burstMs) {
+        _groupSendMs = r.sendMs;
+        _groupArrivalMs = max(_groupArrivalMs, r.arrivalMs);
+        continue;
       }
-      _deltas = min(_deltas + 1, 60);
+      if (_haveGroup) {
+        // Arrivals spreading out more than departures: delay is building.
+        final delta = (_groupArrivalMs - _previousArrivalMs) - (_groupSendMs - _previousSendMs);
+        _accumulatedDelayMs += delta;
+        _smoothedDelayMs = 0.9 * _smoothedDelayMs + 0.1 * _accumulatedDelayMs;
+        _samples.add([_groupArrivalMs - _firstArrivalMs, _smoothedDelayMs]);
+        while (_samples.length > _trendWindow) {
+          _samples.removeAt(0);
+        }
+        _deltas = min(_deltas + 1, 60);
+      }
+      _previousSendMs = _groupSendMs;
+      _previousArrivalMs = _groupArrivalMs;
+      _haveGroup = true;
+      _groupStartSendMs = _groupSendMs = r.sendMs;
+      _groupArrivalMs = r.arrivalMs;
     }
     if (got + lost > 0) lossRate = 0.8 * lossRate + 0.2 * lost / (got + lost);
     // The receive rate over the last second of arrivals. A link that
@@ -168,6 +189,10 @@ class BandwidthEstimator {
     } else {
       _overusingSinceMs = -1;
     }
+    // A queue building shows as the receiver falling behind live. Within a
+    // tenth of a second of live, a rising trend is the link's own unevenness
+    // (a cellular link delivers in bursts), not a queue of ours.
+    if (signal == _Signal.overuse && lagMs >= 0 && lagMs < 100) signal = _Signal.normal;
     _previousTrend = trendMs;
 
     final seconds = dt.clamp(1, 1000) / 1000;
