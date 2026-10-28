@@ -24,10 +24,12 @@ import '../core/storage/storage_client.dart';
 import '../core/storage/storage_offerer.dart';
 import '../core/wire.dart';
 import '../uconnect/uconnect.dart';
+import '../ui/format.dart';
 import '../ui/theme.dart';
 import 'background.dart';
 import 'invite_links.dart';
 import 'store.dart';
+import 'sync_platform.dart';
 
 class AppState extends ChangeNotifier {
   AppState(this.dataDir)
@@ -58,6 +60,8 @@ class AppState extends ChangeNotifier {
   List<CameraInfo> get cameras => cameraCapture.allCameras;
   final _subs = <StreamSubscription<void>>[];
   final _background = BackgroundKeepAlive();
+  late final power = PowerConditions(_applySyncConditions);
+  final syncNotifier = SyncNotifier();
 
   String get downloadsDir => '$dataDir${Platform.pathSeparator}downloads';
   String get sharedDir => '$dataDir${Platform.pathSeparator}shared';
@@ -107,6 +111,8 @@ class AppState extends ChangeNotifier {
       _syncBackgroundService();
       notifyListeners();
     }));
+    unawaited(power.start());
+    _applySyncConditions();
     _subs.add(screenHost.changed.listen((_) => notifyListeners()));
     _subs.add(cameraHost.changed.listen((_) => notifyListeners()));
     _subs.add(storageClient.transfersChanged.listen((_) => notifyListeners()));
@@ -250,7 +256,7 @@ class AppState extends ChangeNotifier {
   // so the OS keeps the process alive in the background; offline/error drop it.
   void _syncBackgroundService() {
     final status = session.status;
-    final text = switch (status) {
+    var text = switch (status) {
       SessionStatus.online => () {
           final n = session.peers.values.where((p) => p.stateCode == 3).length;
           return n == 0
@@ -262,6 +268,8 @@ class AppState extends ChangeNotifier {
         'Connecting to your devices…',
       SessionStatus.offline || SessionStatus.error => '',
     };
+    final syncing = text.isEmpty ? '' : syncSummary();
+    if (syncing.isNotEmpty) text = '$text · $syncing';
     if (text.isEmpty) {
       _lastBgText = '';
       _background.stop();
@@ -339,6 +347,9 @@ class AppState extends ChangeNotifier {
     int? screenShareMaxBitrate,
     int? cameraMaxBitrate,
     String? colorScheme,
+    bool? syncWifiOnly,
+    bool? syncChargingOnly,
+    bool? syncNotify,
   }) async {
     if (server != null) store.server = server.trim();
     if (topicUri != null) store.topicUri = topicUri.trim();
@@ -362,9 +373,50 @@ class AppState extends ChangeNotifier {
     if (screenShareMaxBitrate != null) store.screenShareMaxBitrate = screenShareMaxBitrate;
     if (cameraMaxBitrate != null) store.cameraMaxBitrate = cameraMaxBitrate;
     if (colorScheme != null) store.colorScheme = colorScheme;
+    if (syncWifiOnly != null) store.syncWifiOnly = syncWifiOnly;
+    if (syncChargingOnly != null) store.syncChargingOnly = syncChargingOnly;
+    if (syncNotify != null) store.syncNotify = syncNotify;
     await store.save();
     _applyLocalConfig();
+    _applySyncConditions();
     notifyListeners();
+  }
+
+  // "Only on Wi-Fi" / "only while charging": every folder waits while a
+  // condition the user set does not hold.
+  void _applySyncConditions() {
+    if (!loaded && !_syncStarted) return;
+    final reason = store.syncWifiOnly && power.known && !power.wifi
+        ? 'wifi'
+        : store.syncChargingOnly && power.known && !power.charging
+            ? 'charging'
+            : '';
+    if (sync.suspended != reason) {
+      sync.suspended = reason;
+      _syncBackgroundService();
+      notifyListeners();
+    }
+  }
+
+  /// A short line on what sync is doing across folders, or empty when there
+  /// is nothing to say ("Syncing 3 files, 12 MB left", "Waiting for Wi-Fi").
+  String syncSummary() {
+    if (store.syncFolders.isEmpty) return '';
+    if (sync.suspended == 'wifi') return 'Waiting for Wi-Fi';
+    if (sync.suspended == 'charging') return 'Waiting for the charger';
+    var files = 0, bytes = 0, conflicts = 0, deletes = 0;
+    for (final c in store.syncFolders) {
+      final st = sync.folderStatus(c.id);
+      files += (st['needFiles'] as num?)?.toInt() ?? 0;
+      bytes += (st['needBytes'] as num?)?.toInt() ?? 0;
+      conflicts += (st['conflicts'] as List?)?.length ?? 0;
+      deletes += (st['pendingDeleteCount'] as num?)?.toInt() ?? 0;
+    }
+    final parts = <String>[];
+    if (files > 0) parts.add('Syncing $files file${files == 1 ? '' : 's'}, ${formatBytes(bytes)} left');
+    if (conflicts > 0) parts.add('$conflicts conflict${conflicts == 1 ? '' : 's'}');
+    if (deletes > 0) parts.add('$deletes delete${deletes == 1 ? '' : 's'} waiting for you');
+    return parts.join(' · ');
   }
 
   /// Re-checks whether the accessibility service is on (the user may have just
@@ -426,10 +478,15 @@ class AppState extends ChangeNotifier {
   /// Folders other devices offer this phone, by their key: [{id, label}].
   final syncOffers = <String, List<Map<String, String>>>{};
 
-  /// Recent sync events, newest first.
+  /// Recent sync events, newest first, with when they happened.
   final syncEvents = <SyncEvent>[];
+  bool _syncStarted = false;
+  // Per member: the sizes it was behind by, and since when, for "stays
+  // behind" notifications.
+  final _behind = <String, (int, int)>{}; // key -> (signature, since ms)
 
   void _startSync() {
+    _syncStarted = true;
     sync = SyncService(
       sendControl: (dev, msg) => session.sendControl(dev, msg),
       sendData: (dev, id, bytes) =>
@@ -447,6 +504,7 @@ class AppState extends ChangeNotifier {
       connectedSince: (dev) => session.peers[dev]?.connectedAt ?? -1,
       myKeyHex: identity!.publicKeyHex,
       stateDir: '$dataDir${Platform.pathSeparator}sync',
+      freeSpace: freeSpaceOf,
     );
     session.addControlHandler(sync.handleControl);
     session.setFrameHandler(MessageKind.syncData, sync.handleData);
@@ -462,13 +520,64 @@ class AppState extends ChangeNotifier {
       }
       notifyListeners();
     }));
-    _subs.add(sync.folderChanged.listen((_) => notifyListeners()));
+    _subs.add(sync.folderChanged.listen((id) {
+      _watchBehind(id);
+      _syncBackgroundService();
+      notifyListeners();
+    }));
     _subs.add(sync.events.listen((e) {
       syncEvents.insert(0, e);
       if (syncEvents.length > 200) syncEvents.removeLast();
+      _notifySyncEvent(e);
       notifyListeners();
     }));
     sync.setFolders(store.syncFolders);
+  }
+
+  String _folderLabel(String id) {
+    final c = syncFolder(id);
+    return c == null || c.label.isEmpty ? 'Synced folder' : c.label;
+  }
+
+  void _notifySyncEvent(SyncEvent e) {
+    if (!store.syncNotify) return;
+    final label = _folderLabel(e.folderId);
+    if (e.kind == 'conflict') {
+      unawaited(syncNotifier.show('conflict|${e.folderId}|${e.path}', '$label: conflict',
+          'Your change to ${e.path} conflicts with another device\'s. Choose which to keep.'));
+    } else if (e.kind.startsWith('held:')) {
+      unawaited(syncNotifier.show('held|${e.folderId}|${e.path}', '$label: not synced',
+          '${e.path} has a name not every device can hold. Rename it to sync it.'));
+    } else if (e.kind.startsWith('deletes:')) {
+      final n = e.kind.substring(8);
+      unawaited(syncNotifier.show('deletes|${e.folderId}|$n', '$label: $n deletes waiting',
+          'Another device removed $n files at once. Open the folder to delete them here too, or keep them.'));
+    }
+  }
+
+  // A device online that stays behind by the same amount for 15 minutes.
+  void _watchBehind(String folderId) {
+    final st = sync.folderStatus(folderId);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final m in (st['members'] as List?) ?? const []) {
+      if (m is! Map) continue;
+      final key = '$folderId|${m['key']}';
+      final left = ((m['toSendBytes'] as num?)?.toInt() ?? 0) +
+          ((m['toReceiveBytes'] as num?)?.toInt() ?? 0) +
+          ((m['toSendFiles'] as num?)?.toInt() ?? 0) +
+          ((m['toReceiveFiles'] as num?)?.toInt() ?? 0);
+      if (m['online'] != true || left == 0) {
+        _behind.remove(key);
+        continue;
+      }
+      final was = _behind[key];
+      if (was == null || was.$1 != left) {
+        _behind[key] = (left, now);
+      } else if (now - was.$2 >= 15 * 60 * 1000 && store.syncNotify) {
+        unawaited(syncNotifier.show('behind|$key', '${_folderLabel(folderId)}: a device stays behind',
+            '${deviceNameForKey('${m['key']}')} has not caught up for 15 minutes.'));
+      }
+    }
   }
 
   Future<void> _saveSyncFolders(List<FolderConfig> folders) async {
@@ -561,9 +670,22 @@ class AppState extends ChangeNotifier {
     if (!receive && !contribute) {
       peers.remove(key);
     } else {
-      peers[key] = Grant(receive: receive, contribute: contribute);
+      peers[key] = Grant(
+          receive: receive, contribute: contribute, paused: c.grantOf(key).paused);
     }
     await _replaceSyncFolder(_with(c, peers: peers));
+  }
+
+  /// Pauses one device in a folder: its grants stay, but nothing is sent to
+  /// it or taken from it until it is resumed.
+  Future<void> setSyncMemberPaused(String id, String key, bool paused) async {
+    final c = syncFolder(id);
+    final g = c?.peers[key];
+    if (c == null || g == null || g.paused == paused) return;
+    await _replaceSyncFolder(_with(c, peers: {
+      ...c.peers,
+      key: Grant(receive: g.receive, contribute: g.contribute, paused: paused),
+    }));
   }
 
   Future<void> setSyncPaused(String id, bool paused) async {
@@ -700,6 +822,7 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
+    unawaited(power.dispose());
     _addressTimer?.cancel();
     unawaited(sync.dispose());
     for (final s in _subs) {

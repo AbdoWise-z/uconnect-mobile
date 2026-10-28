@@ -1,6 +1,8 @@
 // Settings > Synced folders: the folders this phone syncs (protocol section
-// 6), the ones other devices offer it, and creating or joining one; and a page
-// per folder for its members, conflicts and state -- the mobile SyncWindow.
+// 6), the ones other devices offer it, creating or joining one, and when
+// sync may run; and a page per folder for its state, what is in it, its
+// rules, its members and how far each is, conflicts and kept files -- the
+// mobile SyncWindow.
 
 import 'dart:io';
 
@@ -11,16 +13,14 @@ import '../app/app_state.dart';
 import '../app/storage_access.dart';
 import '../core/identity.dart';
 import '../core/sync/sync_folder.dart';
+import 'format.dart';
 import 'prompt_dialog.dart';
 import 'settings_widgets.dart';
+import 'sync_files_page.dart';
+import 'sync_kept_page.dart';
+import 'sync_rules_page.dart';
+import 'sync_transfers_page.dart';
 import 'theme.dart';
-
-String _bytes(num n) {
-  if (n < 1024) return '$n B';
-  if (n < 1024 * 1024) return '${(n / 1024).toStringAsFixed(1)} KB';
-  if (n < 1024 * 1024 * 1024) return '${(n / 1024 / 1024).toStringAsFixed(1)} MB';
-  return '${(n / 1024 / 1024 / 1024).toStringAsFixed(1)} GB';
-}
 
 String _stateLine(Map<String, Object?> st, FolderConfig c) {
   final state = (st['state'] as String?) ?? (c.paused ? 'paused' : 'scanning');
@@ -28,14 +28,21 @@ String _stateLine(Map<String, Object?> st, FolderConfig c) {
   final bytes = (st['bytes'] as num?) ?? 0;
   final needFiles = (st['needFiles'] as num?)?.toInt() ?? 0;
   final needBytes = (st['needBytes'] as num?) ?? 0;
+  final conflicts = (st['conflicts'] as List?)?.length ?? 0;
+  final deletes = (st['pendingDeleteCount'] as num?)?.toInt() ?? 0;
   final label = switch (state) {
     'paused' => 'Paused',
+    'waiting' => st['reason'] == 'charging' ? 'Waiting for the charger' : 'Waiting for Wi-Fi',
     'missing' => 'Folder missing',
-    'syncing' => 'Syncing $needFiles file${needFiles == 1 ? '' : 's'} (${_bytes(needBytes)})',
+    'syncing' => 'Syncing ${plural(needFiles, 'file')} (${formatBytes(needBytes)})',
     'scanning' => 'Scanning…',
     _ => 'Up to date',
   };
-  return '$label · $files file${files == 1 ? '' : 's'}, ${_bytes(bytes)}';
+  final extra = [
+    if (conflicts > 0) plural(conflicts, 'conflict'),
+    if (deletes > 0) '$deletes deletes waiting',
+  ].join(', ');
+  return '$label${extra.isEmpty ? '' : ' · $extra'} · ${plural(files, 'file')}, ${formatBytes(bytes)}';
 }
 
 /// Asks where a synced folder should go: the app's own folder (no permission
@@ -136,6 +143,8 @@ class SyncFoldersPage extends StatelessWidget {
             for (final f in e.value)
               if (state.syncFolder(f['id'] ?? '') == null) (e.key, f['id'] ?? '', f['label'] ?? '')
         ];
+        final active = state.sync.transfers().where((t) => t['active'] == true).length;
+        final rate = state.sync.receiveRate();
         return Scaffold(
           backgroundColor: UcColors.canvas,
           appBar: AppBar(title: const Text('Synced folders')),
@@ -162,6 +171,17 @@ class SyncFoldersPage extends StatelessWidget {
                       subtitle: _stateLine(state.sync.folderStatus(c.id), c),
                       onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
                           builder: (_) => SyncFolderPage(state: state, id: c.id))),
+                    ),
+                  if (folders.isNotEmpty)
+                    SettingsTile(
+                      icon: Icons.swap_vert,
+                      iconColor: UcColors.accent,
+                      title: 'Transfers',
+                      subtitle: active == 0
+                          ? 'Nothing being fetched'
+                          : '${plural(active, 'file')} being fetched · ${formatRate(rate)}',
+                      onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                          builder: (_) => SyncTransfersPage(state: state))),
                     ),
                 ],
               ),
@@ -190,6 +210,38 @@ class SyncFoldersPage extends StatelessWidget {
                       ),
                   ],
                 ),
+              SettingsSection(
+                title: 'When to sync',
+                footer: state.sync.suspended.isEmpty
+                    ? 'Sync pauses on every folder while a condition does not hold, and '
+                        'goes on by itself when it does again.'
+                    : state.sync.suspended == 'wifi'
+                        ? 'Waiting for Wi-Fi: the phone is on a metered network.'
+                        : 'Waiting for the charger.',
+                children: [
+                  SettingsSwitchTile(
+                    icon: Icons.wifi,
+                    title: 'Sync only on Wi-Fi',
+                    subtitle: 'Not on mobile data or another metered network',
+                    value: state.store.syncWifiOnly,
+                    onChanged: (v) => state.saveSettings(syncWifiOnly: v),
+                  ),
+                  SettingsSwitchTile(
+                    icon: Icons.battery_charging_full,
+                    title: 'Sync only while charging',
+                    value: state.store.syncChargingOnly,
+                    onChanged: (v) => state.saveSettings(syncChargingOnly: v),
+                  ),
+                  SettingsSwitchTile(
+                    icon: Icons.notifications_outlined,
+                    title: 'Notify about sync problems',
+                    subtitle: 'Conflicts, names that cannot sync, deletes waiting for you, '
+                        'a device that stays behind',
+                    value: state.store.syncNotify,
+                    onChanged: (v) => state.saveSettings(syncNotify: v),
+                  ),
+                ],
+              ),
             ],
           ),
         );
@@ -217,19 +269,8 @@ class SyncFolderPage extends StatelessWidget {
   bool _online(String key) => state.session.peers.values
       .any((p) => p.identityKey == key && p.stateCode == 3);
 
-  String _eventText(String kind) {
-    if (kind.startsWith('following:')) {
-      return 'conflict: followed ${state.deviceNameForKey(kind.substring(10))}';
-    }
-    if (kind.startsWith('blocked:')) return 'not changed here (${kind.substring(8).replaceAll('_', ' ')})';
-    if (kind.startsWith('held:')) return 'not synced here';
-    return switch (kind) {
-      'conflict' => 'conflict: waiting for you',
-      'kept' => 'conflict: kept this phone\'s version',
-      'waiting' => 'conflict: waiting for its devices to connect',
-      _ => kind,
-    };
-  }
+  void _push(BuildContext context, Widget page) =>
+      Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
 
   @override
   Widget build(BuildContext context) {
@@ -246,7 +287,19 @@ class SyncFolderPage extends StatelessWidget {
         final conflicts = (st['conflicts'] as List?)?.cast<Map>() ?? const <Map>[];
         final held = (st['held'] as List?)?.cast<Map>() ?? const <Map>[];
         final blocked = (st['blocked'] as Map?) ?? const {};
+        final members = {
+          for (final m in (st['members'] as List?)?.cast<Map>() ?? const <Map>[])
+            '${m['key']}': m.cast<String, Object?>()
+        };
+        final pending = (st['pendingDeletes'] as List?)?.cast<String>() ?? const <String>[];
+        final pendingCount = (st['pendingDeleteCount'] as num?)?.toInt() ?? 0;
         final events = state.syncEvents.where((e) => e.folderId == id).take(30).toList();
+        final files = (st['files'] as num?)?.toInt() ?? 0;
+        final dirs = (st['dirs'] as num?)?.toInt() ?? 0;
+        final bytes = (st['bytes'] as num?) ?? 0;
+        final free = (st['free'] as num?)?.toInt() ?? -1;
+        final kept = state.sync.keptFiles(id).length;
+        final transfers = (st['transfers'] as List?)?.length ?? 0;
         return Scaffold(
           backgroundColor: UcColors.canvas,
           appBar: AppBar(title: Text(c.label.isEmpty ? 'Synced folder' : c.label)),
@@ -259,6 +312,13 @@ class SyncFolderPage extends StatelessWidget {
                   iconColor: UcColors.warning,
                   title: _stateLine(st, c),
                   subtitle: c.path,
+                ),
+                SettingsTile(
+                  icon: Icons.pie_chart_outline,
+                  title: '${plural(files, 'file')} in ${plural(dirs, 'folder')}, ${formatBytes(bytes)}',
+                  subtitle: free < 0
+                      ? 'Free space on this disk unknown'
+                      : '${formatBytes(free)} free on this disk',
                 ),
                 SettingsSwitchTile(
                   icon: Icons.pause_circle_outline,
@@ -274,21 +334,99 @@ class SyncFolderPage extends StatelessWidget {
                   onTap: () => state.sync.rescan(id),
                 ),
               ]),
+              SettingsSection(children: [
+                SettingsTile(
+                  icon: Icons.account_tree_outlined,
+                  iconColor: UcColors.accent,
+                  title: 'Files',
+                  subtitle: 'What is in the folder, and the state of each file',
+                  onTap: () => _push(context, SyncFilesPage(state: state, id: id)),
+                ),
+                SettingsTile(
+                  icon: Icons.rule,
+                  iconColor: UcColors.accent,
+                  title: 'Rules',
+                  subtitle: 'Edit .syncignore (every device) and .syncskip (this phone)',
+                  onTap: () => _push(context, SyncRulesPage(state: state, id: id)),
+                ),
+                SettingsTile(
+                  icon: Icons.history,
+                  iconColor: UcColors.accent,
+                  title: 'Kept files',
+                  subtitle: kept == 0
+                      ? 'Nothing removed by syncing yet'
+                      : '${plural(kept, 'file')} in .synctrash, restorable',
+                  onTap: () => _push(context, SyncKeptPage(state: state, id: id)),
+                ),
+                SettingsTile(
+                  icon: Icons.swap_vert,
+                  iconColor: UcColors.accent,
+                  title: 'Transfers',
+                  subtitle: transfers == 0
+                      ? 'Nothing being fetched'
+                      : '${plural(transfers, 'file')} being fetched · ${formatRate(state.sync.receiveRate())}',
+                  onTap: () => _push(context, SyncTransfersPage(state: state)),
+                ),
+              ]),
+              if (pendingCount > 0)
+                SettingsSection(
+                  title: 'Deletes waiting for you',
+                  footer: 'Another device removed many files at once. They stay here until '
+                      'you decide. Keeping them makes them this phone\'s changes, so the '
+                      'other devices get them back.',
+                  children: [
+                    SettingsTile(
+                      icon: Icons.delete_sweep_outlined,
+                      iconColor: UcColors.warning,
+                      title: '${plural(pendingCount, 'file')} would be deleted here',
+                      subtitle: [
+                        ...pending.take(5),
+                        if (pendingCount > 5) '…and ${pendingCount - 5} more',
+                      ].join('\n'),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                      child: Row(children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            icon: const Icon(Icons.delete_outline, size: 18),
+                            label: const Text('Delete them'),
+                            onPressed: () => state.sync.confirmDeletes(id, true),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: FilledButton.icon(
+                            icon: const Icon(Icons.restore, size: 18),
+                            label: const Text('Keep them'),
+                            onPressed: () => state.sync.confirmDeletes(id, false),
+                          ),
+                        ),
+                      ]),
+                    ),
+                  ],
+                ),
               SettingsSection(
                 title: 'Devices',
                 footer: 'Send: the device gets this folder and your changes. '
                     'Accept: you take its changes. A device that is only sent the '
-                    'folder keeps a copy without changing yours.',
+                    'folder keeps a copy without changing yours. Pause keeps both '
+                    'settings but grants nothing until you resume.',
                 children: [
                   for (final key in _candidates(c))
                     _MemberRow(
+                      state: state,
                       name: state.deviceNameForKey(key),
                       special: state.store.special.containsKey(key),
                       fingerprint: fingerprintOfHex(key),
                       online: _online(key),
                       grant: c.grantOf(key),
+                      status: members[key],
                       onChanged: (g) => state.setSyncMember(id, key,
                           receive: g.receive, contribute: g.contribute),
+                      onPaused: c.peers.containsKey(key)
+                          ? (p) => state.setSyncMemberPaused(id, key, p)
+                          : null,
                     ),
                   if (_candidates(c).isEmpty)
                     SettingsTile(
@@ -301,10 +439,16 @@ class SyncFolderPage extends StatelessWidget {
                 ],
               ),
               if (conflicts.isNotEmpty)
-                SettingsSection(title: 'Conflicts', children: [
-                  for (final cf in conflicts)
-                    _ConflictRow(state: state, id: id, conflict: cf),
-                ]),
+                SettingsSection(
+                  title: 'Conflicts',
+                  footer: 'Devices changed these files without seeing each other\'s change. '
+                      'Whatever you choose reaches every device; a version you give up is '
+                      'kept in .synctrash.',
+                  children: [
+                    for (final cf in conflicts)
+                      _ConflictRow(state: state, id: id, conflict: cf),
+                  ],
+                ),
               if (held.isNotEmpty || blocked.isNotEmpty)
                 SettingsSection(title: 'Not synced here', children: [
                   for (final h in held)
@@ -315,6 +459,7 @@ class SyncFolderPage extends StatelessWidget {
                       subtitle: '${h['reason']}'.startsWith('clash:')
                           ? 'Only differs in letter case from ${'${h['reason']}'.substring(6)}'
                           : 'Its name does not work on every device (${'${h['reason']}'.replaceFirst('name:', '')})',
+                      onTap: () => showSyncFileHistory(context, state, id, '${h['path']}'),
                     ),
                   for (final e in blocked.entries)
                     SettingsTile(
@@ -322,12 +467,19 @@ class SyncFolderPage extends StatelessWidget {
                       iconColor: UcColors.error,
                       title: '${e.key}',
                       subtitle: 'Not changed here: ${'${e.value}'.replaceAll('_', ' ')}',
+                      onTap: () => showSyncFileHistory(context, state, id, '${e.key}'),
                     ),
                 ]),
               if (events.isNotEmpty)
                 SettingsSection(title: 'Recent', children: [
                   for (final e in events)
-                    SettingsTile(title: e.path, subtitle: _eventText(e.kind)),
+                    SettingsTile(
+                      title: e.path.isEmpty ? (c.label.isEmpty ? 'This folder' : c.label) : e.path,
+                      subtitle: '${formatTime(e.time)}  ${syncEventText(state, e.kind)}',
+                      onTap: e.path.isEmpty
+                          ? null
+                          : () => showSyncFileHistory(context, state, id, e.path),
+                    ),
                 ]),
               SettingsSection(children: [
                 SettingsTile(
@@ -369,20 +521,90 @@ class SyncFolderPage extends StatelessWidget {
 
 class _MemberRow extends StatelessWidget {
   const _MemberRow({
+    required this.state,
     required this.name,
     required this.fingerprint,
     required this.online,
     required this.special,
     required this.grant,
+    required this.status,
     required this.onChanged,
+    required this.onPaused,
   });
 
+  final AppState state;
   final String name;
   final String fingerprint;
   final bool online;
   final bool special;
   final Grant grant;
+  final Map<String, Object?>? status; // from folderStatus().members, once a member
   final ValueChanged<Grant> onChanged;
+  final ValueChanged<bool>? onPaused;
+
+  int _n(String key) => (status?[key] as num?)?.toInt() ?? 0;
+
+  // Where the device is at, as short lines.
+  List<(IconData, Color, String)> _lines() {
+    final st = status;
+    if (st == null) return const [];
+    final out = <(IconData, Color, String)>[];
+    if (grant.paused) {
+      out.add((Icons.pause_circle_outline, UcColors.textSecondary, 'Paused: nothing is sent or taken'));
+    }
+    final sendFiles = _n('toSendFiles'), sendChanges = _n('toSendChanges');
+    final recvFiles = _n('toReceiveFiles'), recvChanges = _n('toReceiveChanges');
+    final eta = _n('eta');
+    if (sendFiles + sendChanges > 0) {
+      out.add((
+        Icons.upload_outlined,
+        UcColors.accent,
+        'To send: ${sendFiles > 0 ? '${plural(sendFiles, 'file')} (${formatBytes(_n('toSendBytes'))})' : ''}'
+            '${sendFiles > 0 && sendChanges > 0 ? ', ' : ''}'
+            '${sendChanges > 0 ? plural(sendChanges, 'other change') : ''}'
+      ));
+    }
+    if (recvFiles + recvChanges > 0) {
+      out.add((
+        Icons.download_outlined,
+        UcColors.accent,
+        'To receive: ${recvFiles > 0 ? '${plural(recvFiles, 'file')} (${formatBytes(_n('toReceiveBytes'))})' : ''}'
+            '${recvFiles > 0 && recvChanges > 0 ? ', ' : ''}'
+            '${recvChanges > 0 ? plural(recvChanges, 'other change') : ''}'
+            '${eta > 0 ? ' · about ${formatDuration(eta)} left' : ''}'
+      ));
+    }
+    final current = '${st['current'] ?? ''}';
+    if (current.isNotEmpty) {
+      final rate = st['sending'] == true ? _n('sendRate') : _n('rate');
+      out.add((
+        st['sending'] == true ? Icons.north_east : Icons.south_west,
+        UcColors.accent,
+        '${st['sending'] == true ? 'Sending' : 'Fetching'} $current'
+            '${rate > 0 ? ' · ${formatRate(rate)}' : ''}'
+      ));
+    }
+    if (sendFiles + sendChanges + recvFiles + recvChanges == 0 && !grant.paused) {
+      final inSync = _n('lastInSync');
+      out.add((
+        Icons.check_circle_outline,
+        UcColors.success,
+        online
+            ? 'Up to date'
+            : inSync > 0
+                ? 'Was up to date ${formatAgo(inSync)}'
+                : 'Not in sync yet'
+      ));
+    } else if (_n('lastInSync') > 0) {
+      out.add((Icons.history, UcColors.textSecondary, 'Last fully in sync ${formatAgo(_n('lastInSync'))}'));
+    }
+    final skipped = _n('skipped');
+    if (skipped > 0) {
+      out.add((Icons.remove_circle_outline, UcColors.textSecondary,
+          'Holds back ${plural(skipped, 'path')} (skipped or not syncable there)'));
+    }
+    return out;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -393,39 +615,65 @@ class _MemberRow extends StatelessWidget {
             Text(label, style: TextStyle(fontSize: 11, color: UcColors.textSecondary)),
           ],
         );
+    final lastSeen = _n('lastSeen');
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 9,
-            height: 9,
-            decoration: BoxDecoration(
-              color: online ? UcColors.success : UcColors.textDisabled,
-              shape: BoxShape.circle,
-            ),
+          Row(
+            children: [
+              Container(
+                width: 9,
+                height: 9,
+                decoration: BoxDecoration(
+                  color: online ? UcColors.success : UcColors.textDisabled,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(name,
+                        style: TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w500, color: UcColors.text)),
+                    Text(
+                        '${online ? 'online' : lastSeen > 0 ? 'last seen ${formatAgo(lastSeen)}' : 'offline'}'
+                        ' · $fingerprint',
+                        style: TextStyle(fontSize: 11, color: UcColors.textSecondary)),
+                    if (!special)
+                      Text('Not syncing: no special rules',
+                          style: TextStyle(fontSize: 11, color: UcColors.warning)),
+                  ],
+                ),
+              ),
+              if (onPaused != null)
+                IconButton(
+                  icon: Icon(grant.paused ? Icons.play_circle_outline : Icons.pause_circle_outline),
+                  tooltip: grant.paused ? 'Resume this device' : 'Pause this device',
+                  color: grant.paused ? UcColors.accent : null,
+                  onPressed: () => onPaused!(!grant.paused),
+                ),
+              toggle('Send', grant.receive,
+                  (on) => onChanged(Grant(receive: on, contribute: grant.contribute))),
+              toggle('Accept', grant.contribute,
+                  (on) => onChanged(Grant(receive: grant.receive, contribute: on))),
+            ],
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(name,
-                    style: TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w500, color: UcColors.text)),
-                Text(fingerprint,
-                    style: TextStyle(
-                        fontSize: 11, fontFamily: 'monospace', color: UcColors.textSecondary)),
-                if (!special)
-                  Text('Not syncing: no special rules',
-                      style: TextStyle(fontSize: 11, color: UcColors.warning)),
-              ],
+          for (final (icon, color, text) in _lines())
+            Padding(
+              padding: const EdgeInsets.only(left: 21, top: 3),
+              child: Row(children: [
+                Icon(icon, size: 14, color: color),
+                const SizedBox(width: 6),
+                Expanded(
+                    child: Text(text,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 12, color: color))),
+              ]),
             ),
-          ),
-          toggle('Send', grant.receive,
-              (on) => onChanged(Grant(receive: on, contribute: grant.contribute))),
-          toggle('Accept', grant.contribute,
-              (on) => onChanged(Grant(receive: grant.receive, contribute: on))),
         ],
       ),
     );
@@ -443,34 +691,77 @@ class _ConflictRow extends StatelessWidget {
     final path = '${conflict['path']}';
     final candidates = (conflict['candidates'] as List?)?.cast<Map>() ?? const <Map>[];
     final waiting = conflict['waiting'] == true;
+    final involved = conflict['involved'] == true;
     final following = '${conflict['following'] ?? ''}';
+    String describe(Map cand) {
+      if (cand['deleted'] == true) return 'deleted';
+      if (cand['dir'] == true) return 'a folder';
+      final mtime = (cand['mtime'] as num?)?.toInt() ?? 0;
+      return '${formatBytes((cand['size'] as num?) ?? 0)} · '
+          '${formatDateTime(DateTime.fromMillisecondsSinceEpoch(mtime))}';
+    }
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(path,
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: UcColors.text)),
+          InkWell(
+            onTap: () => showSyncFileHistory(context, state, id, path),
+            child: Row(children: [
+              Expanded(
+                child: Text(path,
+                    style: TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w500, color: UcColors.text)),
+              ),
+              Icon(Icons.history, size: 18, color: UcColors.textSecondary),
+            ]),
+          ),
           const SizedBox(height: 2),
           Text(
-            following.isNotEmpty
-                ? 'Different on several devices; following ${state.deviceNameForKey(following)}.'
-                : waiting
-                    ? 'Different on several devices; waiting for them to connect.'
-                    : 'Changed differently on several devices. Which one should stay?',
+            involved
+                ? 'You changed it here while another device changed it too. Which one should stay?'
+                : following.isNotEmpty
+                    ? 'Different on several devices; following ${state.deviceNameForKey(following)}, the device connected longest.'
+                    : waiting
+                        ? 'Different on several devices; waiting for them to connect.'
+                        : 'Different on several devices; keeping the version this phone has.',
             style: TextStyle(fontSize: 12.5, color: UcColors.textSecondary),
           ),
+          const SizedBox(height: 6),
+          // The versions side by side.
+          for (final cand in candidates)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Row(children: [
+                Icon(
+                    cand['mine'] == true ? Icons.phone_android : Icons.devices_other,
+                    size: 14,
+                    color: cand['mine'] == true ? UcColors.accent : UcColors.textSecondary),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '${cand['mine'] == true ? 'This phone' : state.deviceNameForKey('${cand['key']}')}: ${describe(cand)}',
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: cand['mine'] == true ? UcColors.text : UcColors.textSecondary),
+                  ),
+                ),
+              ]),
+            ),
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,
             runSpacing: 6,
             children: [
-              OutlinedButton(
-                onPressed: () => state.sync.resolveConflict(id, path, 'mine', ''),
-                child: const Text('Keep mine'),
-              ),
+              if (candidates.any((cand) => cand['mine'] == true))
+                (involved ? FilledButton.new : OutlinedButton.new)(
+                  onPressed: () => state.sync.resolveConflict(id, path, 'mine', ''),
+                  child: Text(involved ? 'Keep mine' : 'Keep this version'),
+                ),
               for (final cand in candidates)
-                if (cand['mine'] != true)
+                if (cand['mine'] != true && '${cand['key']}'.isNotEmpty)
                   OutlinedButton(
                     onPressed: () =>
                         state.sync.resolveConflict(id, path, 'theirs', '${cand['key']}'),

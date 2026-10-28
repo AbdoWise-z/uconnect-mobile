@@ -30,6 +30,7 @@ class MainActivity : FlutterActivity() {
     private var screenDecoder: ScreenDecoder? = null
     private var screenCapturer: ScreenCapturer? = null
     private var cameraCapturer: CameraCapturer? = null
+    private var syncPlatform: SyncPlatform? = null
 
     // uconn:// invite links (from a scanned QR code or a tapped link). The one
     // that launched or reached the app waits here until Dart has taken it.
@@ -87,6 +88,10 @@ class MainActivity : FlutterActivity() {
         cameraCapturer = CameraCapturer(
             this, flutterEngine.dartExecutor.binaryMessenger
         )
+        // Network/charging conditions and notifications for folder sync.
+        syncPlatform = SyncPlatform(
+            applicationContext, flutterEngine.dartExecutor.binaryMessenger
+        )
         // Dart starts the foreground service when a session connects and stops
         // it when the session ends; see lib/app/background.dart.
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "uconnect/service")
@@ -122,6 +127,9 @@ class MainActivity : FlutterActivity() {
                         else ContextCompat.checkSelfPermission(
                             this, Manifest.permission.WRITE_EXTERNAL_STORAGE
                         ) == PackageManager.PERMISSION_GRANTED
+                    )
+                    "freeSpace" -> result.success(
+                        SyncPlatform.freeSpace(call.argument<String>("path") ?: "")
                     )
                     "requestAllFilesAccess" -> {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

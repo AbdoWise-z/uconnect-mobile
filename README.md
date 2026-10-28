@@ -44,7 +44,18 @@
 - **Folder sync.** Keep a folder the same on the phone and your computers,
   with conflicts kept rather than overwritten. Only devices with special rules
   take part, and you choose per folder who is sent it and whose changes you
-  take.
+  take, and can pause one device. A folder's page shows what is in it with
+  each file's state (synced, waiting to send or receive, transferring,
+  conflict, ignored, skipped, not syncable), searchable and filterable, with
+  ignore everywhere / skip on this phone / share / history per file; an
+  editor for `.syncignore` and `.syncskip` with a live preview of which rule
+  decides each path and what saving would change; where each device is at
+  (online or last seen, what is left to send and receive with an ETA, the
+  file in flight, last fully in sync, what it holds back); the transfer
+  queue; kept files with restore; and a guard that holds back a round of
+  deletes that would remove much of the folder at once. Sync can be limited
+  to Wi-Fi or to charging, its problems are notified, and the background
+  notification says what it is doing.
 - **Screen, camera and control.** Watch a computer's screen or camera, and
   share the phone's own screen and camera, each behind a consent prompt
   unless that device's rules allow it without asking. A computer can control
