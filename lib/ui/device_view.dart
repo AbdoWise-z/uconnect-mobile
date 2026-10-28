@@ -8,15 +8,19 @@ import '../app/app_state.dart';
 import '../core/permissions.dart';
 import '../core/session.dart';
 import '../core/wire.dart';
+import 'adaptive.dart';
 import 'screen_view.dart';
 import 'storage_view.dart';
 import 'theme.dart';
 
 class DeviceView extends StatelessWidget {
-  const DeviceView({required this.state, required this.devId, super.key});
+  const DeviceView(
+      {required this.state, required this.devId, this.embedded = false, super.key});
 
   final AppState state;
   final String devId;
+  /// Shown beside the device list on a wide screen: no app bar of its own.
+  final bool embedded;
 
   @override
   Widget build(BuildContext context) {
@@ -25,18 +29,15 @@ class DeviceView extends StatelessWidget {
       builder: (context, _) {
         final p = state.session.peers[devId];
         if (p == null) {
-          return Scaffold(
-            appBar: AppBar(title: const Text('Device')),
-            body: Center(
-              child: Text('This device is no longer in the topic.',
-                  style: TextStyle(color: UcColors.textSecondary)),
-            ),
+          final gone = Center(
+            child: Text('This device is no longer in the topic.',
+                style: TextStyle(color: UcColors.textSecondary)),
           );
+          if (embedded) return Material(color: UcColors.canvas, child: gone);
+          return Scaffold(appBar: AppBar(title: const Text('Device')), body: gone);
         }
-        return Scaffold(
-          appBar: AppBar(title: Text(p.displayName)),
-          backgroundColor: UcColors.canvas,
-          body: ListView(
+        final body = ContentWidth(
+          child: ListView(
             padding: const EdgeInsets.only(bottom: 28),
             children: [
               _header(p),
@@ -46,6 +47,12 @@ class DeviceView extends StatelessWidget {
               if (p.identityState == 'verified') _permissionsCard(context, p),
             ],
           ),
+        );
+        if (embedded) return Material(color: UcColors.canvas, child: body);
+        return Scaffold(
+          appBar: AppBar(title: Text(p.displayName)),
+          backgroundColor: UcColors.canvas,
+          body: body,
         );
       },
     );

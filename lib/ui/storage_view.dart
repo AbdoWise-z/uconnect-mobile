@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import '../app/app_state.dart';
 import '../core/storage/storage_client.dart';
 import 'prompt_dialog.dart';
+import 'adaptive.dart';
 import 'theme.dart';
 
 class StorageView extends StatefulWidget {
@@ -156,7 +157,7 @@ class _StorageViewState extends State<StorageView> {
           ),
         ],
       ),
-      body: _body(),
+      body: ContentWidth(maxWidth: 900, child: _body()),
     );
   }
 

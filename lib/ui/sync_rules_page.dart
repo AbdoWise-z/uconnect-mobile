@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 
 import '../app/app_state.dart';
 import 'format.dart';
+import 'adaptive.dart';
 import 'theme.dart';
 
 class SyncRulesPage extends StatefulWidget {
@@ -108,7 +109,7 @@ class _SyncRulesPageState extends State<SyncRulesPage> with SingleTickerProvider
       ),
       body: TabBarView(
         controller: _tabs,
-        children: [for (final e in _editors) e.build(context)],
+        children: [for (final e in _editors) ContentWidth(child: e.build(context))],
       ),
     );
   }

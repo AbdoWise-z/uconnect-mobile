@@ -13,6 +13,7 @@ import '../app/app_state.dart';
 import '../core/sync/sync_model.dart';
 import '../core/sync/sync_scanner.dart';
 import 'format.dart';
+import 'adaptive.dart';
 import 'theme.dart';
 
 enum _Filter { all, pending, problems, left }
@@ -300,7 +301,8 @@ class _SyncFilesPageState extends State<SyncFilesPage> {
               ),
             ],
           ),
-          body: Column(children: [
+          body: ContentWidth(
+              child: Column(children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
               child: TextField(
@@ -399,7 +401,7 @@ class _SyncFilesPageState extends State<SyncFilesPage> {
                       },
                     ),
             ),
-          ]),
+          ])),
         );
       },
     );

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../app/app_state.dart';
 import 'format.dart';
 import 'settings_widgets.dart';
+import 'adaptive.dart';
 import 'theme.dart';
 
 class SyncTransfersPage extends StatelessWidget {
@@ -29,7 +30,8 @@ class SyncTransfersPage extends StatelessWidget {
         return Scaffold(
           backgroundColor: UcColors.canvas,
           appBar: AppBar(title: const Text('Sync transfers')),
-          body: ListView(padding: const EdgeInsets.only(bottom: 28), children: [
+          body: ContentWidth(
+              child: ListView(padding: const EdgeInsets.only(bottom: 28), children: [
             SettingsSection(
               title: 'Receiving · ${formatRate(rate)}',
               children: [
@@ -81,7 +83,7 @@ class SyncTransfersPage extends StatelessWidget {
                     SettingsTile(title: '…and ${queued.length - 100} more'),
                 ],
               ),
-          ]),
+          ])),
         );
       },
     );

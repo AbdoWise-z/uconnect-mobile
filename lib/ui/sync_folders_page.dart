@@ -14,6 +14,7 @@ import '../app/app_state.dart';
 import '../app/storage_access.dart';
 import '../core/identity.dart';
 import '../core/sync/sync_folder.dart';
+import 'adaptive.dart';
 import 'format.dart';
 import 'prompt_dialog.dart';
 import 'settings_widgets.dart';
@@ -149,7 +150,8 @@ class SyncFoldersPage extends StatelessWidget {
         return Scaffold(
           backgroundColor: UcColors.canvas,
           appBar: AppBar(title: const Text('Synced folders')),
-          body: ListView(
+          body: ContentWidth(
+              child: ListView(
             padding: const EdgeInsets.only(bottom: 28),
             children: [
               SettingsSection(
@@ -244,7 +246,7 @@ class SyncFoldersPage extends StatelessWidget {
                 ],
               ),
             ],
-          ),
+          )),
         );
       },
     );
@@ -303,7 +305,8 @@ class SyncFolderPage extends StatelessWidget {
         return Scaffold(
           backgroundColor: UcColors.canvas,
           appBar: AppBar(title: Text(c.label.isEmpty ? 'Synced folder' : c.label)),
-          body: ListView(
+          body: ContentWidth(
+              child: ListView(
             padding: const EdgeInsets.only(bottom: 28),
             children: [
               SettingsSection(title: 'Folder', children: [
@@ -504,7 +507,7 @@ class SyncFolderPage extends StatelessWidget {
                 ),
               ]),
             ],
-          ),
+          )),
         );
       },
     );

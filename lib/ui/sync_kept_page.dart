@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../app/app_state.dart';
 import 'format.dart';
 import 'settings_widgets.dart';
+import 'adaptive.dart';
 import 'theme.dart';
 
 class SyncKeptPage extends StatefulWidget {
@@ -55,7 +56,8 @@ class _SyncKeptPageState extends State<SyncKeptPage> {
           IconButton(icon: const Icon(Icons.refresh), tooltip: 'Refresh', onPressed: _refresh),
         ],
       ),
-      body: ListView(padding: const EdgeInsets.only(bottom: 28), children: [
+      body: ContentWidth(
+          child: ListView(padding: const EdgeInsets.only(bottom: 28), children: [
         SettingsSection(
           title: 'In .synctrash',
           footer: 'Files that syncing deletes, or that you give up in a conflict, wait here '
@@ -117,7 +119,7 @@ class _SyncKeptPageState extends State<SyncKeptPage> {
               ),
           ],
         ),
-      ]),
+      ])),
     );
   }
 }

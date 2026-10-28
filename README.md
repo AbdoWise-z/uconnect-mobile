@@ -76,6 +76,10 @@
   How the phone watches other devices (the quality to ask for and the
   playback buffer) has its own page, Use other devices › Watching.
 - **Color schemes.** Follow system, Dark, Darker, Light or Colorful.
+- **Tablets and wide screens.** From 600 dp the tabs move to a rail on the
+  left and lists keep a reading width; from 840 dp the devices tab shows the
+  list beside the chosen device's page, and Settings show the overview beside
+  the page a row opens. Phones in landscape get the same.
 
 ### Screenshots
 

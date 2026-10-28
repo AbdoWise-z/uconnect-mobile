@@ -11,6 +11,7 @@ import '../core/network_rules.dart';
 import '../core/permissions.dart';
 import '../core/session.dart';
 import 'settings_widgets.dart';
+import 'adaptive.dart';
 import 'theme.dart';
 
 class NetworkRulesPage extends StatefulWidget {
@@ -161,7 +162,8 @@ class _NetworkRulesPageState extends State<NetworkRulesPage> {
         return Scaffold(
           backgroundColor: UcColors.canvas,
           appBar: AppBar(title: const Text('Network rules')),
-          body: ListView(
+          body: ContentWidth(
+              child: ListView(
             padding: const EdgeInsets.only(bottom: 28),
             children: [
               Padding(
@@ -254,7 +256,7 @@ class _NetworkRulesPageState extends State<NetworkRulesPage> {
                       style: TextStyle(fontSize: 13, color: UcColors.text)),
                 ),
             ],
-          ),
+          )),
         );
       },
     );
@@ -362,7 +364,8 @@ class _NetworkRuleEditorPageState extends State<NetworkRuleEditorPage> {
               ),
             ],
           ),
-          body: ListView(
+          body: ContentWidth(
+              child: ListView(
             padding: const EdgeInsets.only(bottom: 28),
             children: [
               SettingsSection(
@@ -413,7 +416,7 @@ class _NetworkRuleEditorPageState extends State<NetworkRuleEditorPage> {
                     ),
                 ]),
             ],
-          ),
+          )),
         );
       },
     );

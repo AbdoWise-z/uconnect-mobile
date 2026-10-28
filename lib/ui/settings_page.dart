@@ -17,6 +17,7 @@ import '../app/store.dart';
 import '../core/identity.dart';
 import '../core/permissions.dart';
 import '../core/session.dart';
+import 'adaptive.dart';
 import 'prompt_dialog.dart';
 import 'scan_page.dart';
 import 'network_rules_page.dart';
@@ -27,8 +28,10 @@ import 'sync_folders_page.dart';
 import 'theme.dart';
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({required this.state, super.key});
+  const SettingsPage({required this.state, this.twoPane = false, super.key});
   final AppState state;
+  /// Wide screens: the overview on the left, the page a row opens beside it.
+  final bool twoPane;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -44,9 +47,25 @@ class _SettingsPageState extends State<SettingsPage> {
 
   String _onOff(bool on) => on ? 'On' : 'Off';
 
+  // The page open in the second pane, when there is one.
+  String? _paneTitle;
+  List<Widget> Function(BuildContext)? _paneBuilder;
+  String? _paneHighlight;
+
   void _open(String title, List<Widget> Function(BuildContext) builder,
-          {String? highlight}) =>
+      {String? highlight}) {
+    if (!widget.twoPane) {
       openSettingsPage(context, state, title, builder, highlight: highlight);
+      return;
+    }
+    setState(() {
+      _paneTitle = title;
+      _paneBuilder = builder;
+      _paneHighlight = highlight;
+    });
+  }
+
+  bool _isOpen(String title) => widget.twoPane && _paneTitle == title;
 
   final _search = TextEditingController();
   String get _query => _search.text.trim().toLowerCase();
@@ -59,7 +78,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
+    final overview = ListView(
       padding: const EdgeInsets.only(bottom: 28),
       children: [
         _searchField(),
@@ -70,6 +89,25 @@ class _SettingsPageState extends State<SettingsPage> {
           ..._results(context),
       ],
     );
+    if (!widget.twoPane) return ContentWidth(child: overview);
+    final builder = _paneBuilder;
+    return Row(children: [
+      SizedBox(width: kListPaneWidth + 40, child: overview),
+      VerticalDivider(width: 1, thickness: 1, color: UcColors.divider),
+      Expanded(
+        child: builder == null
+            ? const PanePlaceholder(
+                icon: Icons.tune, text: 'Choose a setting on the left.')
+            : SettingsSubpage(
+                key: ValueKey(_paneTitle),
+                title: _paneTitle!,
+                state: state,
+                builder: builder,
+                highlight: _paneHighlight,
+                embedded: true,
+              ),
+      ),
+    ]);
   }
 
   // --- search ---------------------------------------------------------------
@@ -189,12 +227,14 @@ class _SettingsPageState extends State<SettingsPage> {
             title: 'Appearance',
             subtitle: _schemeLabel,
             onTap: () => _open('Appearance', _appearancePage),
+            selected: _isOpen('Appearance'),
           ),
           SettingsTile(
             icon: Icons.hub_outlined,
             title: 'Topic & connection',
             subtitle: store.server.isEmpty ? 'No server set' : store.server,
             onTap: () => _open('Topic & connection', _topicPage),
+            selected: _isOpen('Topic & connection'),
           ),
         ]),
         SettingsSection(title: 'Share from this phone', children: [
@@ -204,6 +244,7 @@ class _SettingsPageState extends State<SettingsPage> {
             title: 'Storage',
             subtitle: _onOff(store.offerStorage),
             onTap: () => _open('Storage', _storagePage),
+            selected: _isOpen('Storage'),
           ),
           SettingsTile(
             icon: Icons.folder_copy_outlined,
@@ -221,6 +262,7 @@ class _SettingsPageState extends State<SettingsPage> {
             title: 'Camera',
             subtitle: _onOff(store.offerCamera),
             onTap: () => _open('Camera', _cameraPage),
+            selected: _isOpen('Camera'),
           ),
           SettingsTile(
             icon: Icons.screen_share_outlined,
@@ -228,6 +270,7 @@ class _SettingsPageState extends State<SettingsPage> {
             title: 'Screen sharing',
             subtitle: _onOff(store.offerScreen),
             onTap: () => _open('Screen sharing', _screenPage),
+            selected: _isOpen('Screen sharing'),
           ),
           SettingsTile(
             icon: Icons.touch_app_outlined,
@@ -237,6 +280,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 ? 'On · accessibility service is off'
                 : _onOff(store.offerControl),
             onTap: () => _open('Remote control', _controlPage),
+            selected: _isOpen('Remote control'),
           ),
         ]),
         SettingsSection(title: 'Use other devices', children: [
@@ -248,6 +292,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 '${state.store.screenMaxFps} fps · '
                 '${ViewQuality.bitrateLabel(state.store.viewBitrate)}',
             onTap: () => _open('Watching', _watchingPage),
+            selected: _isOpen('Watching'),
           ),
         ]),
         SettingsSection(
@@ -264,6 +309,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   ? 'None yet'
                   : '$specialCount device${specialCount == 1 ? '' : 's'}',
               onTap: () => _open('Special rules', _specialPage),
+            selected: _isOpen('Special rules'),
             ),
             SettingsTile(
               icon: Icons.lan_outlined,
@@ -282,6 +328,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   ? 'Nothing'
                   : '$defaultsCount permission${defaultsCount == 1 ? '' : 's'}',
               onTap: () => _open('Default permissions', _defaultsPage),
+            selected: _isOpen('Default permissions'),
             ),
           ],
         ),
@@ -292,6 +339,7 @@ class _SettingsPageState extends State<SettingsPage> {
             title: 'uConnect Mobile',
             subtitle: 'Version 0.2.0',
             onTap: () => _open('About', _aboutPage),
+            selected: _isOpen('About'),
           ),
         ]),
     ];
@@ -305,7 +353,7 @@ class _SettingsPageState extends State<SettingsPage> {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       child: Material(
-        color: UcColors.panel,
+        color: _isOpen('This device') ? UcColors.selection : UcColors.panel,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
           side: BorderSide(color: UcColors.border),

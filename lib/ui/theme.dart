@@ -350,6 +350,14 @@ ThemeData ucTheme() {
               ? UcColors.text
               : UcColors.textSecondary)),
     ),
+    navigationRailTheme: NavigationRailThemeData(
+      backgroundColor: UcColors.panel,
+      indicatorColor: UcColors.selection,
+      selectedLabelTextStyle: TextStyle(fontSize: 12, color: UcColors.text),
+      unselectedLabelTextStyle: TextStyle(fontSize: 12, color: UcColors.textSecondary),
+      selectedIconTheme: IconThemeData(color: UcColors.text),
+      unselectedIconTheme: IconThemeData(color: UcColors.textSecondary),
+    ),
     cardTheme: CardThemeData(
       color: UcColors.panel,
       elevation: 0,

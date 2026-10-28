@@ -6,6 +6,7 @@
 import 'package:flutter/material.dart';
 
 import '../app/app_state.dart';
+import 'adaptive.dart';
 import 'theme.dart';
 
 /// A titled group of rows drawn as one rounded panel, with an optional
@@ -100,6 +101,7 @@ class SettingsTile extends StatelessWidget {
     this.trailing,
     this.onTap,
     this.enabled = true,
+    this.selected = false,
     super.key,
   });
 
@@ -110,6 +112,7 @@ class SettingsTile extends StatelessWidget {
   final Widget? trailing;
   final VoidCallback? onTap;
   final bool enabled;
+  final bool selected; // the row whose page is open beside the list
 
   @override
   Widget build(BuildContext context) {
@@ -121,7 +124,7 @@ class SettingsTile extends StatelessWidget {
 
   Widget _row() {
     return Material(
-      color: Colors.transparent,
+      color: selected ? UcColors.selection : Colors.transparent,
       child: InkWell(
         onTap: enabled ? onTap : null,
         child: Padding(
@@ -325,32 +328,50 @@ class SettingsSubpage extends StatelessWidget {
       required this.state,
       required this.builder,
       this.highlight,
+      this.embedded = false,
       super.key});
 
   final String title;
   final AppState state;
   final List<Widget> Function(BuildContext context) builder;
   final String? highlight;
+  /// Shown beside the settings overview rather than as its own page: a title
+  /// row in place of the app bar.
+  final bool embedded;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
         listenable: state,
-        builder: (context, _) => Scaffold(
-          backgroundColor: UcColors.canvas,
-          appBar: AppBar(title: Text(title)),
-          body: SettingsHighlight(
+        builder: (context, _) {
+          final body = SettingsHighlight(
             text: highlight,
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.only(bottom: 28),
-              child: Builder(
-                builder: (context) => Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: builder(context),
+            child: ContentWidth(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.only(bottom: 28),
+                child: Builder(
+                  builder: (context) => Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: builder(context),
+                  ),
                 ),
               ),
             ),
-          ),
-        ),
+          );
+          if (embedded) {
+            return Material(
+              color: UcColors.canvas,
+              child: Column(children: [
+                PaneHeader(title: Text(title)),
+                Expanded(child: body),
+              ]),
+            );
+          }
+          return Scaffold(
+            backgroundColor: UcColors.canvas,
+            appBar: AppBar(title: Text(title)),
+            body: body,
+          );
+        },
       );
 }
 
