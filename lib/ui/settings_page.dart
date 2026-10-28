@@ -528,6 +528,35 @@ class _SettingsPageState extends State<SettingsPage> {
             ]),
           ],
         ),
+      if (Platform.isAndroid)
+        SettingsSection(
+          title: 'In the background',
+          footer: 'uConnect keeps a notification while connected so Android lets it '
+              'run in the background. Some phones and tablets still put apps to '
+              'sleep after a while (battery settings, "sleeping apps"); exempting '
+              'uConnect there keeps it reachable and syncing.',
+          children: [
+            SettingsTile(
+              icon: Icons.battery_saver_outlined,
+              iconColor: state.batteryExempt == false ? UcColors.warning : UcColors.success,
+              title: 'Keep running in the background',
+              subtitle: switch (state.batteryExempt) {
+                true => 'Allowed: this device will not put uConnect to sleep',
+                false => 'This device may put uConnect to sleep. Tap to allow it to keep running.',
+                null => 'Not known on this device',
+              },
+              onTap: state.batteryExempt == false ? state.requestBatteryExemption : null,
+            ),
+            if (state.backgroundRefused)
+              SettingsTile(
+                icon: Icons.notifications_off_outlined,
+                iconColor: UcColors.warning,
+                title: 'Background keep-alive refused',
+                subtitle: 'The system would not let uConnect stay up in the background '
+                    'just now. It connects while open; opening it again restores this.',
+              ),
+          ],
+        ),
       SettingsSection(title: 'Topic', children: [
         SettingsTile(
           icon: Icons.qr_code_scanner,

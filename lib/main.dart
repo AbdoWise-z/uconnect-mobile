@@ -53,8 +53,10 @@ class _UConnectAppState extends State<UConnectApp> with WidgetsBindingObserver {
     if (lifecycle == AppLifecycleState.detached) {
       widget.state.shutdown();
     } else if (lifecycle == AppLifecycleState.resumed) {
-      // The user may have just turned the accessibility service on in Settings.
+      // The user may have just turned the accessibility service on in
+      // Settings, or exempted the app from battery optimisation.
       widget.state.refreshControlAvailability();
+      widget.state.refreshBackgroundStatus();
     }
   }
 

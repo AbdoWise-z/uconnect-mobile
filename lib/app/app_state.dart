@@ -113,6 +113,7 @@ class AppState extends ChangeNotifier {
       notifyListeners();
     }));
     unawaited(power.start());
+    unawaited(refreshBackgroundStatus());
     _applySyncConditions();
     _subs.add(screenHost.changed.listen((_) => notifyListeners()));
     _subs.add(cameraHost.changed.listen((_) => notifyListeners()));
@@ -255,6 +256,23 @@ class AppState extends ChangeNotifier {
 
   // A session that is up, connecting or retrying holds the foreground service
   // so the OS keeps the process alive in the background; offline/error drop it.
+  // Whether the user wants to be connected: the keep-alive service runs for
+  // as long as this holds, through drops and reconnects. Stopping it on a
+  // drop and starting it again on reconnect does not work: Android 12+
+  // refuses a foreground service started from the background, and the app
+  // would then be frozen until opened again.
+  bool _wantConnected = false;
+  bool _backgroundRefused = false;
+  bool? _batteryExempt;
+
+  /// The system refused the keep-alive service; the app stays connected only
+  /// while open.
+  bool get backgroundRefused => _backgroundRefused;
+
+  /// True when Android will not put the app to sleep; null where unknown or
+  /// not applicable.
+  bool? get batteryExempt => _batteryExempt;
+
   void _syncBackgroundService() {
     final status = session.status;
     var text = switch (status) {
@@ -267,7 +285,9 @@ class AppState extends ChangeNotifier {
       SessionStatus.connecting ||
       SessionStatus.reconnecting =>
         'Connecting to your devices…',
-      SessionStatus.offline || SessionStatus.error => '',
+      SessionStatus.offline ||
+      SessionStatus.error =>
+        _wantConnected ? 'Not connected · will reconnect' : '',
     };
     final syncing = text.isEmpty ? '' : syncSummary();
     if (syncing.isNotEmpty) text = '$text · $syncing';
@@ -276,12 +296,30 @@ class AppState extends ChangeNotifier {
       _background.stop();
     } else if (text != _lastBgText) {
       _lastBgText = text;
-      _background.start(text);
+      unawaited(_background.start(text).then((ok) {
+        if (_backgroundRefused == ok) {
+          _backgroundRefused = !ok;
+          notifyListeners();
+        }
+      }));
     }
   }
 
+  /// Re-reads whether the app is exempt from battery optimisation (the user
+  /// may have just changed it in the system prompt).
+  Future<void> refreshBackgroundStatus() async {
+    final exempt = await _background.isExemptFromBatteryOptimizations();
+    if (exempt != _batteryExempt) {
+      _batteryExempt = exempt;
+      notifyListeners();
+    }
+  }
+
+  Future<void> requestBatteryExemption() => _background.requestBatteryExemption();
+
   Future<void> connect() async {
     startError = '';
+    _wantConnected = true;
     final creds = TopicCreds.parse(store.topicUri);
     if (creds == null) {
       startError = 'The invite link is not a valid uconn:// URI.';
@@ -302,13 +340,16 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> disconnect() async {
+    _wantConnected = false;
     await session.stop();
+    _syncBackgroundService();
     notifyListeners();
   }
 
   /// Leaves the topic: disconnects, stops sharing, and forgets the link (kept
   /// as [AppStore.lastTopicUri] to rejoin), so the app shows the connect page.
   Future<void> leaveTopic() async {
+    _wantConnected = false;
     await screenHost.stop();
     await cameraHost.stop();
     await session.stop();
@@ -818,6 +859,7 @@ class AppState extends ChangeNotifier {
   void shutdown() {
     // First, synchronously: the async stops below may never finish once the
     // engine is torn down, and the node would linger as a ghost device.
+    _wantConnected = false;
     session.stopNow();
     unawaited(_background.stop());
     unawaited(screenHost.stop());

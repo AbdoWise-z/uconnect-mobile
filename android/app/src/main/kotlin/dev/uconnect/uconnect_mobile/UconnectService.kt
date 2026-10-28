@@ -19,7 +19,11 @@ import android.os.IBinder
 // the app is in the background.
 //
 // Started and stopped from Dart over the "uconnect/service" MethodChannel
-// (see MainActivity): start when a session connects, stop when it ends.
+// (see MainActivity): started when a session connects and kept for as long
+// as the user wants to be connected (also while reconnecting: Android 12+
+// refuses to start a foreground service from the background, so one that
+// was stopped during a dropped connection could not come back until the app
+// was opened again), stopped when the user disconnects or leaves.
 class UconnectService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -83,11 +87,23 @@ class UconnectService : Service() {
             .setContentIntent(pending)
             .setOngoing(true)
             .build()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NOTIFICATION_ID, notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-            )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // connectedDevice: no daily limit (dataSync gets six hours on
+            // Android 15+, after which the service is stopped and the app is
+            // frozen in the background). Should the system refuse the kind,
+            // fall back to dataSync rather than not running at all.
+            try {
+                startForeground(
+                    NOTIFICATION_ID, notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                )
+            } catch (e: SecurityException) {
+                android.util.Log.w("uconnect", "connectedDevice refused, using dataSync: ${e.message}")
+                startForeground(
+                    NOTIFICATION_ID, notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            }
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }

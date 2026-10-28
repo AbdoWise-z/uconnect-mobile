@@ -99,17 +99,37 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "start" -> {
                         val text = call.argument<String>("text") ?: "Connected"
-                        // Refused once the day's dataSync allowance is used up
-                        // (Android 15): the session still runs in the foreground.
+                        // Refused when started from the background (Android
+                        // 12+) or once a dataSync day is used up (Android 15):
+                        // the session still runs while the app is open. Dart
+                        // hears about it and says so in Settings.
                         try {
                             UconnectService.start(applicationContext, text)
+                            result.success(true)
                         } catch (e: IllegalStateException) {
                             android.util.Log.w("uconnect", "background service refused: ${e.message}")
+                            result.success(false)
                         }
-                        result.success(null)
                     }
                     "stop" -> {
                         UconnectService.stop(applicationContext)
+                        result.success(null)
+                    }
+                    // Whether Android may put the app to sleep in the background
+                    // (battery optimisation), and the system prompt to exempt it.
+                    "batteryOptimizations" -> {
+                        val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+                        result.success(pm.isIgnoringBatteryOptimizations(packageName))
+                    }
+                    "requestIgnoreBatteryOptimizations" -> {
+                        val ask = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                            .setData(android.net.Uri.parse("package:$packageName"))
+                        try {
+                            startActivity(ask)
+                        } catch (e: android.content.ActivityNotFoundException) {
+                            // Some builds have no prompt; the list of apps then.
+                            startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        }
                         result.success(null)
                     }
                     else -> result.notImplemented()

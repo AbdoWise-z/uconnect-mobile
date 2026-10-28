@@ -70,7 +70,12 @@
   network (or one you choose), and a statistics overlay shows how both
   devices keep up. Sharing has its own limits in Settings.
 - **Stays connected.** A foreground service keeps the session alive in the
-  background, and ends it cleanly when the app closes.
+  background for as long as you want to be connected, through drops and
+  reconnects (Android will not let a stopped service start again from the
+  background), as a `connectedDevice` service, which has no daily time limit.
+  Settings › Topic & connection shows whether the device may still put the
+  app to sleep and lets you exempt it; it also says when the system refused
+  the keep-alive, in which case the app connects while open.
 - **Searchable settings.** The search field at the top of Settings finds
   single settings, says where each is, and opens its page pointing at it.
   How the phone watches other devices (the quality to ask for and the

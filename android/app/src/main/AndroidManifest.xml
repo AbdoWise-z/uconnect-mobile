@@ -6,6 +6,15 @@
     <!-- Keep the encrypted session alive while the app is in the background. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <!-- The keep-alive service is of the connectedDevice kind (this device
+         talks to the user's other devices over the network), which has no
+         daily time limit; dataSync is the fallback. connectedDevice needs a
+         network-shaping permission to be held; CHANGE_NETWORK_STATE is the
+         harmless one. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>
+    <!-- Lets the user exempt the app from being put to sleep (Settings › Topic). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- Share this device's screen to a trusted peer. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
@@ -56,7 +65,7 @@
         <service
             android:name=".UconnectService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="connectedDevice|dataSync" />
 
         <service
             android:name=".ScreenCaptureService"
