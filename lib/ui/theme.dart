@@ -333,6 +333,12 @@ ThemeData ucTheme() {
       backgroundColor: UcColors.panel,
       foregroundColor: UcColors.text,
       elevation: 0,
+      // Flat: no tint when content scrolls under it. With several lists
+      // built at once (the tabs, two panes) their scroll notifications would
+      // flip the tint back and forth and the bar flickered.
+      scrolledUnderElevation: 0,
+      surfaceTintColor: Colors.transparent,
+      shadowColor: Colors.transparent,
       centerTitle: false,
       titleTextStyle: TextStyle(
         color: UcColors.text,

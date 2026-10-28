@@ -27,6 +27,7 @@ class Node {
   late final SyncService svc;
   Map<String, Object?> status = {};
   final events = <String>[];
+  final offered = <String, int>{}; // peer key -> folders in its last offers
 }
 
 class Net {
@@ -37,6 +38,7 @@ class Net {
   final links = <String>{};
   final since = <String, int>{};
   final inFlight = <String, int>{};
+  final noOffersTo = <String>{}; // "from>to": `from` does not offer folders to `to`
   int dataBytes = 0; // block data delivered, all links
 
   static String pair(int a, int b) => '${min(a, b)}-${max(a, b)}';
@@ -60,10 +62,12 @@ class Net {
       },
       myKeyHex: key,
       stateDir: '${dir.path}${Platform.pathSeparator}$name-state',
+      offersTo: (d) => !noOffersTo.contains('$index>${indexOf(d)}'),
     )
       ..scanIntervalMs = 150
       ..stableAfterMs = 0;
     n.svc.folderChanged.listen((id) => n.status = n.svc.folderStatus(id));
+    n.svc.offers.listen((o) => n.offered[o.peerKey] = o.folders.length);
     n.svc.events.listen((e) => n.events.add('${e.path} ${e.kind}'));
     nodes.add(n);
     return n;
@@ -901,4 +905,24 @@ void main() {
     b.svc.suspended = '';
     await eventually(() => contents(at(1, 'a.txt')) == 'a');
   }, timeout: const Timeout(Duration(seconds: 60)));
+
+  test('offers follow the Offer sync permission', () async {
+    net.add('alice');
+    final bob = net.add('bob');
+    net.join(0); // alice shares; bob has not joined
+    net.noOffersTo.add('0>1');
+    net.link(0, 1);
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    expect(bob.offered[net.nodes[0].key] ?? 0, 0, reason: 'not offered without the permission');
+    // Granted: alice tells bob about her folder on the next peerUp.
+    net.noOffersTo.remove('0>1');
+    net.nodes[0].svc.peerUp(bob.dev);
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    expect(bob.offered[net.nodes[0].key], 1);
+    // Taken away again: the offers it gets are empty, so it forgets them.
+    net.noOffersTo.add('0>1');
+    net.nodes[0].svc.peerUp(bob.dev);
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    expect(bob.offered[net.nodes[0].key], 0);
+  });
 }

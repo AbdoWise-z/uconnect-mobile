@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import '../app/app_state.dart';
 import '../app/storage_access.dart';
 import '../core/identity.dart';
+import '../core/permissions.dart';
 import '../core/sync/sync_folder.dart';
 import 'adaptive.dart';
 import 'format.dart';
@@ -157,8 +158,9 @@ class SyncFoldersPage extends StatelessWidget {
               SettingsSection(
                 title: 'On this phone',
                 footer: 'A synced folder stays the same on every device it is shared '
-                    'with: a change on any of them reaches the others. Only devices '
-                    'you gave special rules take part, as you choose per folder.',
+                    'with: a change on any of them reaches the others. A device takes '
+                    'part once you grant it Offer sync or Receive sync (its permissions), '
+                    'then you choose per folder.',
                 children: [
                   if (folders.isEmpty)
                     SettingsTile(
@@ -258,16 +260,9 @@ class SyncFolderPage extends StatelessWidget {
   final AppState state;
   final String id;
 
-  // Devices that can be members: those with special rules (only they sync),
-  // and anyone already a member, so they can be removed.
-  List<String> _candidates(FolderConfig c) {
-    final keys = <String>{
-      ...state.store.special.keys,
-      ...c.peers.keys,
-    }..remove('');
-    return keys.toList()
-      ..sort((a, b) => state.deviceNameForKey(a).compareTo(state.deviceNameForKey(b)));
-  }
+  // Devices that can be members: those granted a sync permission here, and
+  // anyone already a member, so they can be removed.
+  List<String> _candidates(FolderConfig c) => state.syncCandidates(c);
 
   bool _online(String key) => state.session.peers.values
       .any((p) => p.identityKey == key && p.stateCode == 3);
@@ -412,7 +407,7 @@ class SyncFolderPage extends StatelessWidget {
                     _MemberRow(
                       state: state,
                       name: state.deviceNameForKey(key),
-                      special: state.store.special.containsKey(key),
+                      syncs: syncsWith(state.permissionsOfKey(key)),
                       fingerprint: fingerprintOfHex(key),
                       online: _online(key),
                       grant: c.grantOf(key),
@@ -428,8 +423,8 @@ class SyncFolderPage extends StatelessWidget {
                       icon: Icons.devices_other,
                       iconColor: UcColors.textDisabled,
                       title: 'No devices yet',
-                      subtitle: 'Folders sync only with devices you gave special '
-                          'rules: add them from its device page.',
+                      subtitle: 'Folders sync with devices granted Offer sync or Receive '
+                          'sync here: grant one from its device page, or in the defaults.',
                     ),
                 ],
               ),
@@ -571,7 +566,7 @@ class _MemberRow extends StatelessWidget {
     required this.name,
     required this.fingerprint,
     required this.online,
-    required this.special,
+    required this.syncs,
     required this.grant,
     required this.status,
     required this.onChanged,
@@ -582,7 +577,7 @@ class _MemberRow extends StatelessWidget {
   final String name;
   final String fingerprint;
   final bool online;
-  final bool special;
+  final bool syncs; // granted a sync permission here
   final Grant grant;
   final Map<String, Object?>? status; // from folderStatus().members, once a member
   final ValueChanged<Grant> onChanged;
@@ -689,8 +684,8 @@ class _MemberRow extends StatelessWidget {
                         '${online ? 'online' : lastSeen > 0 ? 'last seen ${formatAgo(lastSeen)}' : 'offline'}'
                         ' · $fingerprint',
                         style: TextStyle(fontSize: 11, color: UcColors.textSecondary)),
-                    if (!special)
-                      Text('Not syncing: no special rules',
+                    if (!syncs)
+                      Text('Not syncing: no sync permission here',
                           style: TextStyle(fontSize: 11, color: UcColors.warning)),
                   ],
                 ),

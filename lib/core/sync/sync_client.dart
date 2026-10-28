@@ -58,6 +58,7 @@ void _workerMain(_WorkerArgs a) {
   // What the main isolate knows about each connected device, mirrored here.
   final keys = <String, String>{};
   final since = <String, int>{};
+  final offers = <String>{}; // devices that may be offered folders
   final freeAsked = <int, Completer<int>>{};
   var nextFree = 1;
 
@@ -72,6 +73,7 @@ void _workerMain(_WorkerArgs a) {
     },
     peerKey: (dev) => keys[dev],
     connectedSince: (dev) => since[dev] ?? -1,
+    offersTo: offers.contains,
     myKeyHex: a.myKeyHex,
     stateDir: a.stateDir,
     freeSpace: (path) {
@@ -139,15 +141,22 @@ void _workerMain(_WorkerArgs a) {
           if (key == null) {
             keys.remove(dev);
             since.remove(dev);
+            offers.remove(dev);
           } else {
             keys[dev] = key;
             since[dev] = m[3] as int;
+            if (m[4] == true) {
+              offers.add(dev);
+            } else {
+              offers.remove(dev);
+            }
           }
           svc.peerUp(dev);
         case 'peerGone':
           final dev = m[1] as String;
           keys.remove(dev);
           since.remove(dev);
+          offers.remove(dev);
           svc.peerGone(dev);
         case 'control':
           svc.handleControl(m[1] as String, (m[2] as Map).cast<String, Object?>());
@@ -203,11 +212,13 @@ class SyncClient {
     required String myKeyHex,
     required String stateDir,
     Future<int> Function(String path)? freeSpace,
+    bool Function(String dev)? offersTo,
     void Function(String message)? onError,
   })  : _sendControl = sendControl,
         _sendData = sendData,
         _peerKey = peerKey,
         _since = connectedSince,
+        _offersTo = offersTo,
         _myKeyHex = myKeyHex,
         _stateDir = stateDir,
         _freeSpace = freeSpace,
@@ -217,6 +228,7 @@ class SyncClient {
   final bool Function(String, int, Uint8List) _sendData;
   final String? Function(String) _peerKey;
   final int Function(String) _since;
+  final bool Function(String)? _offersTo;
   final String _myKeyHex;
   final String _stateDir;
   final Future<int> Function(String)? _freeSpace;
@@ -387,7 +399,8 @@ class SyncClient {
   /// connection time are read now and travel with the message.
   void peerUp(String dev) {
     final key = _peerKey(dev);
-    _send(['peerUp', dev, key, key == null ? -1 : _since(dev)]);
+    _send(['peerUp', dev, key, key == null ? -1 : _since(dev),
+      key != null && (_offersTo?.call(dev) ?? true)]);
   }
 
   void peerGone(String dev) {

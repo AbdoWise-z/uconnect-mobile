@@ -42,9 +42,10 @@
   your computers share, and share folders from the phone, with read-only
   shares. Downloads resume and every file is checked against its SHA-256.
 - **Folder sync.** Keep a folder the same on the phone and your computers,
-  with conflicts kept rather than overwritten. Only devices with special rules
-  take part, and you choose per folder who is sent it and whose changes you
-  take, and can pause one device. A folder's page shows what is in it with
+  with conflicts kept rather than overwritten. A device takes part once you
+  grant it **Offer sync** or **Receive sync**, like any other permission
+  (special rules, a network rule or the defaults); you then choose per folder
+  who is sent it and whose changes you take, and can pause one device. A folder's page shows what is in it with
   each file's state (synced, waiting to send or receive, transferring,
   conflict, ignored, skipped, not syncable), searchable and filterable, with
   ignore everywhere / skip on this phone / share / history per file; an

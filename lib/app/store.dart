@@ -118,6 +118,8 @@ class AppStore {
   bool syncWifiOnly = false;
   bool syncChargingOnly = false;
   bool syncNotify = true;
+  // Members of synced folders got the sync permissions once (see AppState).
+  bool syncPermsMigrated = false;
   List<SharedFolder> shares = [];
   // Colour scheme id (see ui/theme.dart): system, dark, darker, light, colorful.
   String colorScheme = 'dark';
@@ -172,6 +174,7 @@ class AppStore {
     syncWifiOnly = decoded['syncWifiOnly'] == true;
     syncChargingOnly = decoded['syncChargingOnly'] == true;
     syncNotify = decoded['syncNotify'] != false;
+    syncPermsMigrated = decoded['syncPermsMigrated'] == true;
     colorScheme = decoded['colorScheme'] is String
         ? decoded['colorScheme'] as String
         : 'dark';
@@ -242,6 +245,7 @@ class AppStore {
       'syncWifiOnly': syncWifiOnly,
       'syncChargingOnly': syncChargingOnly,
       'syncNotify': syncNotify,
+      'syncPermsMigrated': syncPermsMigrated,
       'networkRules': {
         for (final e in networkRules.entries)
           if (e.value.isNotEmpty) e.key: networkRulesToJson(e.value)

@@ -330,7 +330,7 @@ class DeviceView extends StatelessWidget {
         service = info.service;
         rows.add(Padding(
           padding: const EdgeInsets.only(top: 8, bottom: 2),
-          child: Text(service.toUpperCase(),
+          child: Text(serviceLabel(service).toUpperCase(),
               style: TextStyle(
                   fontSize: 11,
                   letterSpacing: 1,

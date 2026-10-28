@@ -319,10 +319,12 @@ class SyncService {
     required String myKeyHex,
     required String stateDir,
     Future<int> Function(String path)? freeSpace,
+    bool Function(String dev)? offersTo,
   })  : _sendControl = sendControl,
         _sendData = sendData,
         _peerKey = peerKey,
         _since = connectedSince,
+        _offersTo = offersTo,
         _freeSpace = freeSpace,
         _me = memberIdOf(myKeyHex),
         _stateDir = stateDir {
@@ -338,6 +340,9 @@ class SyncService {
   final bool Function(String, int, Uint8List) _sendData;
   final String? Function(String) _peerKey;
   final int Function(String) _since;
+  // Whether a peer is told which folders it is a member of (its "Offer sync"
+  // permission here); without it the offers it gets are empty. Null: always.
+  final bool Function(String)? _offersTo;
   final Future<int> Function(String)? _freeSpace;
   final String _me;
   final String _stateDir;
@@ -513,9 +518,10 @@ class SyncService {
     final peer = _peers[dev];
     if (peer == null) return;
     final offers = [
-      for (final e in _folders.entries)
-        if (e.value.state.config.grantOf(peer.key).sends)
-          {'id': e.key, 'label': e.value.state.config.label}
+      if (_offersTo?.call(dev) ?? true)
+        for (final e in _folders.entries)
+          if (e.value.state.config.grantOf(peer.key).sends)
+            {'id': e.key, 'label': e.value.state.config.label}
     ];
     _enqueue(dev, _Out.control({'t': 'sync.offers', 'folders': offers}));
   }

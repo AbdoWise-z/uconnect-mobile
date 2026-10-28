@@ -103,6 +103,7 @@ class AppState extends ChangeNotifier {
         cameraCapture.allCameras = const [];
       }
     }
+    await _migrateSyncPermissions();
     _startSync();
     _applyLocalConfig();
     screenHost.offered = store.offerScreen;
@@ -221,6 +222,9 @@ class AppState extends ChangeNotifier {
     screenHost.maxWidthCap = store.screenShareMaxWidth;
     screenHost.maxFpsCap = store.screenShareMaxFps;
     screenHost.maxBitrateCap = store.screenShareMaxBitrate;
+    // Any permission change may change who syncs; told once the policy
+    // below is in place.
+    Future.microtask(_resyncPeers);
     session.setLocalHello(Hello(
       name: store.deviceName,
       os: Platform.isAndroid
@@ -535,16 +539,19 @@ class AppState extends ChangeNotifier {
       sendControl: (dev, msg) => session.sendControl(dev, msg),
       sendData: (dev, id, bytes) =>
           session.sendFrame(dev, MessageKind.syncData, id, bytes),
-      // Only a proven peer with special rules takes part (network rules and
-      // defaults never reach sync); each folder's grants then name which.
+      // A proven peer takes part once it is granted Offer sync or Receive
+      // sync here (from any layer: special rules, a network rule or the
+      // defaults); each folder's grants then name what it is sent and
+      // taken from.
       peerKey: (dev) {
         final p = session.peers[dev];
         return p != null &&
                 p.identityState == 'verified' &&
-                store.special.containsKey(p.identityKey)
+                syncsWith(session.permissionsFor(dev))
             ? p.identityKey
             : null;
       },
+      offersTo: (dev) => session.permissionsFor(dev).contains(Perm.syncOffer),
       connectedSince: (dev) => session.peers[dev]?.connectedAt ?? -1,
       myKeyHex: identity!.publicKeyHex,
       stateDir: '$dataDir${Platform.pathSeparator}sync',
@@ -559,7 +566,8 @@ class AppState extends ChangeNotifier {
       if (state == ucPeerClosed || state == ucPeerFailed) sync.peerGone(dev);
     });
     _subs.add(sync.offers.listen((o) {
-      if (o.folders.isEmpty) {
+      // Shown only from a device granted Receive sync here.
+      if (o.folders.isEmpty || !mayReceiveSyncFrom(o.peerKey)) {
         syncOffers.remove(o.peerKey);
       } else {
         syncOffers[o.peerKey] = o.folders;
@@ -634,9 +642,12 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Grants or special rules may have changed: let connected, proven peers
-  // hear about it (one that lost its special rules drops out of sync).
+  // Permissions may have changed: let connected, proven peers hear about it
+  // (one that lost both sync permissions drops out of sync; one that gained
+  // Offer sync is told its folders). Offers already shown are checked again.
   void _resyncPeers() {
+    if (!_syncStarted) return;
+    syncOffers.removeWhere((key, _) => !mayReceiveSyncFrom(key));
     for (final p in session.peers.values) {
       if (p.stateCode == ucPeerConnected && p.identityState == 'verified') {
         sync.peerUp(p.devId);
@@ -692,9 +703,48 @@ class AppState extends ChangeNotifier {
     return id;
   }
 
+  /// What a device with this key is granted here, as far as is known: for a
+  /// connected peer every layer, otherwise its special rules and the defaults
+  /// (a network rule needs its address).
+  Set<String> permissionsOfKey(String key) {
+    for (final p in session.peers.values) {
+      if (p.identityKey == key && p.identityState == 'verified') {
+        return session.permissionsFor(p.devId);
+      }
+    }
+    return {
+      ...normalizePermissions(store.defaultPermissions),
+      ...?store.special[key]?.permissions,
+    };
+  }
+
+  /// Whether a device's folder offers are shown here (Receive sync).
+  bool mayReceiveSyncFrom(String key) =>
+      permissionsOfKey(key).contains(Perm.syncReceive);
+
+  /// Devices that can be made members of a folder: those granted Offer sync
+  /// or Receive sync here, as far as is known (special rules, connected
+  /// peers), plus anyone already a member.
+  List<String> syncCandidates(FolderConfig c) {
+    final keys = <String>{...c.peers.keys};
+    for (final key in store.special.keys) {
+      if (syncsWith(permissionsOfKey(key))) keys.add(key);
+    }
+    for (final p in session.peers.values) {
+      if (p.identityState == 'verified' &&
+          p.identityKey.isNotEmpty &&
+          syncsWith(session.permissionsFor(p.devId))) {
+        keys.add(p.identityKey);
+      }
+    }
+    keys.remove('');
+    return keys.toList()
+      ..sort((a, b) => deviceNameForKey(a).compareTo(deviceNameForKey(b)));
+  }
+
   /// Joins a folder a proven device offers: it is sent here and accepted from.
   Future<bool> joinSyncFolder(String peerKey, String id, String label, String path) async {
-    if (syncFolder(id) != null || !store.special.containsKey(peerKey)) return false;
+    if (syncFolder(id) != null || !mayReceiveSyncFrom(peerKey)) return false;
     await Directory(path).create(recursive: true);
     await _saveSyncFolders([
       ...store.syncFolders,
@@ -744,6 +794,25 @@ class AppState extends ChangeNotifier {
     await _saveSyncFolders([for (final f in store.syncFolders) if (f.id != id) f]);
     final state = File('$dataDir${Platform.pathSeparator}sync${Platform.pathSeparator}$id.json');
     if (await state.exists()) await state.delete();
+  }
+
+  // Before sync 1.3 a device took part by having special rules; now it needs
+  // Offer sync or Receive sync. Once: every member of a synced folder that
+  // has special rules and neither permission gets both, so nothing stops
+  // syncing on update.
+  Future<void> _migrateSyncPermissions() async {
+    if (store.syncPermsMigrated) return;
+    var changed = false;
+    for (final c in store.syncFolders) {
+      for (final key in c.peers.keys) {
+        final t = store.special[key];
+        if (t == null || syncsWith(t.permissions)) continue;
+        t.permissions = {...t.permissions, Perm.syncOffer, Perm.syncReceive};
+        changed = true;
+      }
+    }
+    store.syncPermsMigrated = true;
+    if (changed || store.syncFolders.isNotEmpty || store.special.isNotEmpty) await store.save();
   }
 
   /// A name for a device key: from special rules, a connected peer, or short.

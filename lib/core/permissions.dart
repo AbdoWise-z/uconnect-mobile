@@ -17,6 +17,8 @@ class Perm {
   static const controlDirect = 'control.direct';
   static const displayShow = 'display.show';
   static const displayDirect = 'display.direct';
+  static const syncOffer = 'sync.offer';
+  static const syncReceive = 'sync.receive';
 }
 
 class PermissionInfo {
@@ -124,7 +126,35 @@ const List<PermissionInfo> permissionTable = [
           'Use this device\'s screen as a monitor without a consent prompt.',
       available: false,
       sensitive: true),
+  PermissionInfo(
+      id: Perm.syncOffer,
+      service: 'sync',
+      label: 'Offer sync',
+      description:
+          "Be offered this device's synced folders, and be sent the folders it is a member of."),
+  PermissionInfo(
+      id: Perm.syncReceive,
+      service: 'sync',
+      label: 'Receive sync',
+      description:
+          'Have its synced folders offered here, so this device can join them.'),
 ];
+
+/// A name for a service, as the permission editors head their groups.
+String serviceLabel(String service) => switch (service) {
+      'storage' => 'Storage',
+      'camera' => 'Camera',
+      'screen' => 'Screen sharing',
+      'control' => 'Remote control',
+      'display' => 'Extended display',
+      'sync' => 'Folder sync',
+      _ => service,
+    };
+
+/// Whether a device with these permissions takes part in folder sync at
+/// all: it is offered folders, or its offers are taken, or both.
+bool syncsWith(Iterable<String> perms) =>
+    perms.contains(Perm.syncOffer) || perms.contains(Perm.syncReceive);
 
 bool isKnownPermission(String id) => permissionTable.any((p) => p.id == id);
 

@@ -423,11 +423,4 @@ class _NetworkRuleEditorPageState extends State<NetworkRuleEditorPage> {
   }
 }
 
-String _serviceLabel(String service) => switch (service) {
-      'storage' => 'Storage',
-      'camera' => 'Camera',
-      'screen' => 'Screen sharing',
-      'control' => 'Remote control',
-      'display' => 'Extended display',
-      _ => service,
-    };
+String _serviceLabel(String service) => serviceLabel(service);
