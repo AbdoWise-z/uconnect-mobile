@@ -55,7 +55,8 @@
   queue; kept files with restore; and a guard that holds back a round of
   deletes that would remove much of the folder at once. Sync can be limited
   to Wi-Fi or to charging, its problems are notified, and the background
-  notification says what it is doing.
+  notification says what it is doing. The engine runs on its own isolate, so
+  a folder of many files or a large transfer never holds up the screen.
 - **Screen, camera and control.** Watch a computer's screen or camera, and
   share the phone's own screen and camera, each behind a consent prompt
   unless that device's rules allow it without asking. A computer can control
@@ -166,7 +167,7 @@ build on; the Dart side is platform-independent and ready for it.
 
 ## Known issues and next up
 
-Where the app stands (updated 2026-10-24):
+Where the app stands (updated 2026-10-28):
 
 - **Streaming over mobile data** holds a lag budget of a second: the phone's
   screen reaches a desktop at 30 fps/480p on a ~1 Mbit/s uplink with 10%
@@ -176,6 +177,11 @@ Where the app stands (updated 2026-10-24):
   were found to forget a quiet TCP connection within half a minute.
 - The stream view shows a live line (size, fps, rate, lag), a one-screen
   quality sheet and self-hiding controls in full screen.
+- **Folder sync** runs on a worker isolate (2026-10-28): planning a large
+  folder, hashing blocks and listing files used to run on the UI isolate and
+  froze the app during large syncs. Planning is now paced by how long a round
+  takes, a fetch reuses one index of local blocks per change rather than
+  building its own, and the state file is written every 30 s while fetching.
 - **Open:** one viewer at a time when the phone shares; `test/app_smoke_test.dart`
   hangs (pre-existing); iOS has not been built.
 - **Next up:** bandwidth probing when the encoder has little to send, temporal

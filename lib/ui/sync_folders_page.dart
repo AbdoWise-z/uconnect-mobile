@@ -4,6 +4,7 @@
 // rules, its members and how far each is, conflicts and kept files -- the
 // mobile SyncWindow.
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -298,7 +299,6 @@ class SyncFolderPage extends StatelessWidget {
         final dirs = (st['dirs'] as num?)?.toInt() ?? 0;
         final bytes = (st['bytes'] as num?) ?? 0;
         final free = (st['free'] as num?)?.toInt() ?? -1;
-        final kept = state.sync.keptFiles(id).length;
         final transfers = (st['transfers'] as List?)?.length ?? 0;
         return Scaffold(
           backgroundColor: UcColors.canvas,
@@ -349,15 +349,7 @@ class SyncFolderPage extends StatelessWidget {
                   subtitle: 'Edit .syncignore (every device) and .syncskip (this phone)',
                   onTap: () => _push(context, SyncRulesPage(state: state, id: id)),
                 ),
-                SettingsTile(
-                  icon: Icons.history,
-                  iconColor: UcColors.accent,
-                  title: 'Kept files',
-                  subtitle: kept == 0
-                      ? 'Nothing removed by syncing yet'
-                      : '${plural(kept, 'file')} in .synctrash, restorable',
-                  onTap: () => _push(context, SyncKeptPage(state: state, id: id)),
-                ),
+                _KeptTile(state: state, id: id),
                 SettingsTile(
                   icon: Icons.swap_vert,
                   iconColor: UcColors.accent,
@@ -514,6 +506,57 @@ class SyncFolderPage extends StatelessWidget {
             ],
           ),
         );
+      },
+    );
+  }
+}
+
+/// The "Kept files" entry: how many wait in .synctrash, asked of the sync
+/// worker when the page opens and after the kept-files page closes, not on
+/// every status tick.
+class _KeptTile extends StatefulWidget {
+  const _KeptTile({required this.state, required this.id});
+  final AppState state;
+  final String id;
+
+  @override
+  State<_KeptTile> createState() => _KeptTileState();
+}
+
+class _KeptTileState extends State<_KeptTile> {
+  int? _count;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final list = await widget.state.sync.keptFiles(widget.id);
+      if (mounted) setState(() => _count = list.length);
+    } on Object {
+      // sync stopped
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final kept = _count;
+    return SettingsTile(
+      icon: Icons.history,
+      iconColor: UcColors.accent,
+      title: 'Kept files',
+      subtitle: kept == null
+          ? 'Files removed by syncing, restorable'
+          : kept == 0
+              ? 'Nothing removed by syncing yet'
+              : '${plural(kept, 'file')} in .synctrash, restorable',
+      onTap: () async {
+        await Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => SyncKeptPage(state: widget.state, id: widget.id)));
+        unawaited(_load());
       },
     );
   }

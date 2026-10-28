@@ -71,7 +71,7 @@ class _SyncRulesPageState extends State<SyncRulesPage> with SingleTickerProvider
       );
       if (ok != true || !mounted) return;
     }
-    final saved = widget.state.sync.saveRules(widget.id, e.skip, e.controller.text);
+    final saved = await widget.state.sync.saveRules(widget.id, e.skip, e.controller.text);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(saved ? 'Saved. The folder is being scanned again.' : 'Could not save.')));
@@ -117,20 +117,33 @@ class _SyncRulesPageState extends State<SyncRulesPage> with SingleTickerProvider
 /// One rules file being edited, with its debounced preview.
 class _RulesEditor {
   _RulesEditor(this.page, this.skip) {
-    saved = page.widget.state.sync.rulesText(page.widget.id, skip);
-    controller = TextEditingController(text: saved);
+    controller = TextEditingController();
     controller.addListener(_changed);
     probe.addListener(_changed);
-    _refresh();
+    unawaited(_load());
   }
 
   final _SyncRulesPageState page;
   final bool skip;
-  late String saved;
+  String saved = '';
+  bool loaded = false; // the file has been read; until then the editor waits
   late final TextEditingController controller;
   final probe = TextEditingController();
   Map<String, Object?> preview = const {};
   Timer? _debounce;
+
+  Future<void> _load() async {
+    try {
+      final text = await page.widget.state.sync.rulesText(page.widget.id, skip);
+      if (!page.mounted) return;
+      saved = text;
+      loaded = true;
+      controller.text = text;
+      page.refresh();
+    } on Object {
+      // sync stopped
+    }
+  }
 
   void dispose() {
     _debounce?.cancel();
@@ -147,10 +160,19 @@ class _RulesEditor {
     _debounce = Timer(const Duration(milliseconds: 250), _refresh);
   }
 
-  void _refresh() {
-    preview = page.widget.state.sync
-        .previewRules(page.widget.id, skip, controller.text, probe: probe.text.trim());
-    if (page.mounted) page.refresh();
+  Future<void> _refresh() async {
+    final text = controller.text;
+    final probed = probe.text.trim();
+    try {
+      final p = await page.widget.state.sync
+          .previewRules(page.widget.id, skip, text, probe: probed);
+      // Typed on meanwhile: a newer preview is on its way.
+      if (!page.mounted || text != controller.text || probed != probe.text.trim()) return;
+      preview = p;
+      page.refresh();
+    } on Object {
+      // sync stopped
+    }
   }
 
   Widget build(BuildContext context) {
@@ -196,6 +218,7 @@ class _RulesEditor {
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
         child: TextField(
           controller: controller,
+          readOnly: !loaded,
           maxLines: null,
           minLines: 6,
           keyboardType: TextInputType.multiline,

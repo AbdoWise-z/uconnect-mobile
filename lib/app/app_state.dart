@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../core/identity.dart';
 import '../core/network_rules.dart';
+import '../core/sync/sync_client.dart';
 import '../core/sync/sync_folder.dart';
 import '../core/sync/sync_service.dart';
 import '../core/permissions.dart';
@@ -473,7 +474,7 @@ class AppState extends ChangeNotifier {
   // The engine (core/sync) speaks protocol section 6 with the other devices;
   // this wires it to the session and keeps the folder list in the store.
 
-  late final SyncService sync;
+  late final SyncClient sync;
 
   /// Folders other devices offer this phone, by their key: [{id, label}].
   final syncOffers = <String, List<Map<String, String>>>{};
@@ -487,7 +488,9 @@ class AppState extends ChangeNotifier {
 
   void _startSync() {
     _syncStarted = true;
-    sync = SyncService(
+    // The engine runs on its own isolate (SyncClient): a large folder's
+    // planning, hashing and listing never hold up the UI.
+    sync = SyncClient(
       sendControl: (dev, msg) => session.sendControl(dev, msg),
       sendData: (dev, id, bytes) =>
           session.sendFrame(dev, MessageKind.syncData, id, bytes),
@@ -505,7 +508,9 @@ class AppState extends ChangeNotifier {
       myKeyHex: identity!.publicKeyHex,
       stateDir: '$dataDir${Platform.pathSeparator}sync',
       freeSpace: freeSpaceOf,
+      onError: (m) => debugPrint('sync worker: $m'),
     );
+    unawaited(sync.start());
     session.addControlHandler(sync.handleControl);
     session.setFrameHandler(MessageKind.syncData, sync.handleData);
     session.addIdentityHandler(sync.peerUp);

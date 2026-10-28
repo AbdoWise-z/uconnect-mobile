@@ -3,6 +3,7 @@
 // conflict, ignored, skipped, not syncable), a search and a filter, and per
 // path: ignore everywhere, skip on this phone, share, history.
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -80,11 +81,58 @@ class _SyncFilesPageState extends State<SyncFilesPage> {
   final _expanded = <String>{};
   final _search = TextEditingController();
   _Filter _filter = _Filter.all;
+  // The list comes from the sync worker; it is asked again a moment after
+  // sync reports a change, not with every progress tick.
+  List<Map<String, Object?>> _all = const [];
+  bool _listed = false;
+  bool _loading = false;
+  bool _again = false;
+  Timer? _reload;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.state.addListener(_changed);
+    unawaited(_load());
+  }
 
   @override
   void dispose() {
+    widget.state.removeListener(_changed);
+    _reload?.cancel();
     _search.dispose();
     super.dispose();
+  }
+
+  void _changed() {
+    _reload ??= Timer(const Duration(milliseconds: 600), () {
+      _reload = null;
+      unawaited(_load());
+    });
+  }
+
+  Future<void> _load() async {
+    if (_loading) {
+      _again = true;
+      return;
+    }
+    _loading = true;
+    try {
+      final list = await widget.state.sync.files(widget.id);
+      if (!mounted) return;
+      setState(() {
+        _all = list;
+        _listed = true;
+      });
+    } on Object {
+      // sync stopped
+    } finally {
+      _loading = false;
+    }
+    if (_again && mounted) {
+      _again = false;
+      _changed();
+    }
   }
 
   bool _passes(Map<String, Object?> row) {
@@ -177,15 +225,15 @@ class _SyncFilesPageState extends State<SyncFilesPage> {
         await showSyncFileHistory(context, widget.state, widget.id, path);
       case 'ignore':
         final ok = await _confirmRule(context, path, false);
-        if (ok) widget.state.sync.addRule(widget.id, false, path);
+        if (ok) await widget.state.sync.addRule(widget.id, false, path);
       case 'skip':
         if (await _confirmRule(context, path, true)) {
-          widget.state.sync.addRule(widget.id, true, path);
+          await widget.state.sync.addRule(widget.id, true, path);
         }
       case 'share':
         await SharePlus.instance.share(ShareParams(files: [XFile(abs)]));
     }
-    if (mounted) setState(() {});
+    if (mounted) unawaited(_load());
   }
 
   Future<bool> _confirmRule(BuildContext context, String path, bool skip) async =>
@@ -210,11 +258,10 @@ class _SyncFilesPageState extends State<SyncFilesPage> {
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: widget.state,
-      builder: (context, _) {
+    return Builder(
+      builder: (context) {
         final c = widget.state.syncFolder(widget.id);
-        final all = widget.state.sync.files(widget.id);
+        final all = _all;
         final rows = _visible(all);
         var pending = 0, problems = 0, left = 0;
         for (final r in all) {
@@ -277,7 +324,11 @@ class _SyncFilesPageState extends State<SyncFilesPage> {
               child: rows.isEmpty
                   ? Center(
                       child: Text(
-                          all.isEmpty ? 'Nothing in this folder yet.' : 'Nothing matches.',
+                          !_listed
+                              ? 'Listing…'
+                              : all.isEmpty
+                                  ? 'Nothing in this folder yet.'
+                                  : 'Nothing matches.',
                           style: TextStyle(color: UcColors.textSecondary)))
                   : ListView.builder(
                       itemCount: rows.length,
@@ -360,12 +411,16 @@ class _SyncFilesPageState extends State<SyncFilesPage> {
 /// holds, kept versions (with Restore), and the recent events about it.
 Future<void> showSyncFileHistory(
     BuildContext context, AppState state, String id, String path) {
+  var future = state.sync.fileInfo(id, path);
   return showModalBottomSheet<void>(
     context: context,
     backgroundColor: UcColors.panel,
     isScrollControlled: true,
-    builder: (context) => StatefulBuilder(builder: (context, setSheet) {
-      final info = state.sync.fileInfo(id, path);
+    builder: (context) => StatefulBuilder(
+        builder: (context, setSheet) => FutureBuilder<Map<String, Object?>>(
+            future: future,
+            builder: (context, snap) {
+      final info = snap.data ?? const <String, Object?>{'state': 'loading'};
       final c = state.syncFolder(id);
       // Member ids (in version vectors) to device names.
       final members = <String, String>{
@@ -455,13 +510,14 @@ Future<void> showSyncFileHistory(
               trailing: IconButton(
                 icon: const Icon(Icons.restore),
                 tooltip: 'Restore this version',
-                onPressed: () {
-                  final ok = state.sync.restoreKept(id, '${k['kept']}');
+                onPressed: () async {
+                  final ok = await state.sync.restoreKept(id, '${k['kept']}');
+                  if (!context.mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                       content: Text(ok
                           ? 'Restored beside the current file; it syncs as your change.'
                           : 'Could not restore it.')));
-                  setSheet(() {});
+                  setSheet(() => future = state.sync.fileInfo(id, path));
                 },
               ),
             ),
@@ -476,7 +532,7 @@ Future<void> showSyncFileHistory(
           const SizedBox(height: 16),
         ]),
       );
-    }),
+    })),
   );
 }
 

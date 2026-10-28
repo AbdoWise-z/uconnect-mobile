@@ -34,11 +34,12 @@ class SyncOffers {
 /// io | clash, or `held:<reason>` (see SyncFolder.heldReason()) for a file
 /// present here that is not synced.
 class SyncEvent {
-  SyncEvent(this.folderId, this.path, this.kind);
+  SyncEvent(this.folderId, this.path, this.kind, {DateTime? time})
+      : time = time ?? DateTime.now();
   final String folderId;
   final String path;
   final String kind;
-  final DateTime time = DateTime.now();
+  final DateTime time;
   @override
   String toString() => '$path $kind';
 }
@@ -51,6 +52,8 @@ const _maxPulls = 32; // files being fetched per folder
 const _pumpBudget = 8 * 1024 * 1024; // bytes sent per turn
 const _requestTimeoutMs = 30000;
 const _saveEveryMs = 2000;
+const _saveWhileFetchingMs = 30000;
+const _maxPlanPauseMs = 5000;
 const _cleanEveryMs = 3600 * 1000;
 const _rateWindowMs = 5000; // rates are averaged over this long
 const _emitEveryMs = 400; // progress reaches the UI this often
@@ -123,6 +126,11 @@ class _Folder {
   int nextScan = 0;
   bool dirty = false; // state to save
   bool replan = true; // decisions to make again
+  int nextPlan = 0; // planning a large folder is paced by how long it takes
+  // Every block of every file here, by hash: where a fetch can copy it from.
+  // Built once per change of the index, not once per fetch started.
+  Map<String, (String, int)>? blockIndex;
+  int blockIndexSeq = -1;
   final pulls = SplayTreeMap<String, _Pull>();
   final blocked = <String, String>{}; // path -> why it cannot be applied now
   final logged = <String>{}; // things already told
@@ -668,8 +676,15 @@ class SyncService {
       final f = _folders[id];
       if (f == null || f.state.config.paused || _suspended.isNotEmpty) continue;
       // Planning need not wait for a scan: a scan's result leaves alone
-      // whatever changed after it began.
-      if (f.replan) _plan(id);
+      // whatever changed after it began. Every finished fetch asks for
+      // another round; a round over a large folder takes a while, so the
+      // next waits a few times that long rather than running every tick.
+      if (f.replan && now >= f.nextPlan) {
+        final began = _now;
+        _plan(id);
+        final took = _now - began;
+        f.nextPlan = _now + (took * 4 < _maxPlanPauseMs ? took * 4 : _maxPlanPauseMs);
+      }
       if (now >= f.nextCleanup) _cleanKept(id);
       if (!f.scanning && (f.rescanSoon || now >= f.nextScan)) _startScan(id);
       _requestBlocks(id);
@@ -693,7 +708,11 @@ class SyncService {
         _sendIndex(e.key, id, false);
       }
     }
-    if (now - _lastSave >= _saveEveryMs) {
+    // The state file is the whole index; while fetches are running it changes
+    // with every file, and a rescan rebuilds it anyway, so it is written less
+    // often then.
+    final fetching = _folders.values.any((f) => f.pulls.isNotEmpty);
+    if (now - _lastSave >= (fetching ? _saveWhileFetchingMs : _saveEveryMs)) {
       _lastSave = now;
       for (final f in _folders.values) {
         if (f.dirty) {
@@ -1231,13 +1250,7 @@ class SyncService {
     // Where each block can come from without the network: the part file of an
     // earlier attempt, or any file here that has it (a rename, a copy, an
     // earlier version).
-    final localBlocks = <String, (String, int)>{};
-    for (final e in f.state.local.values) {
-      if (e.deleted || e.dir || e.skipped) continue;
-      for (var i = 0; i < e.blocks.length; i++) {
-        localBlocks[bytesToHex(e.blocks[i])] = (e.path, i * e.blockSize);
-      }
-    }
+    final localBlocks = _blockIndex(f);
     for (var i = 0; i < target.blocks.length; i++) {
       final offset = i * target.blockSize;
       final length = target.blockLength(i);
@@ -1274,6 +1287,20 @@ class SyncService {
     p.lastProgress = _now;
     f.pulls[path] = p;
     if (p.missing.isEmpty) _finishPull(folderId, path);
+  }
+
+  Map<String, (String, int)> _blockIndex(_Folder f) {
+    if (f.blockIndex != null && f.blockIndexSeq == f.state.seq) return f.blockIndex!;
+    final index = <String, (String, int)>{};
+    for (final e in f.state.local.values) {
+      if (e.deleted || e.dir || e.skipped) continue;
+      for (var i = 0; i < e.blocks.length; i++) {
+        index[bytesToHex(e.blocks[i])] = (e.path, i * e.blockSize);
+      }
+    }
+    f.blockIndex = index;
+    f.blockIndexSeq = f.state.seq;
+    return index;
   }
 
   void _requestBlocks(String folderId) {

@@ -18,9 +18,28 @@ class SyncKeptPage extends StatefulWidget {
 }
 
 class _SyncKeptPageState extends State<SyncKeptPage> {
-  late List<Map<String, Object?>> _kept = widget.state.sync.keptFiles(widget.id);
+  List<Map<String, Object?>> _kept = const [];
+  bool _listed = false;
 
-  void _refresh() => setState(() => _kept = widget.state.sync.keptFiles(widget.id));
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    try {
+      final list = await widget.state.sync.keptFiles(widget.id);
+      if (mounted) {
+        setState(() {
+          _kept = list;
+          _listed = true;
+        });
+      }
+    } on Object {
+      // sync stopped
+    }
+  }
 
   void _tell(String text) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
@@ -48,8 +67,8 @@ class _SyncKeptPageState extends State<SyncKeptPage> {
               SettingsTile(
                 icon: Icons.delete_sweep_outlined,
                 iconColor: UcColors.textDisabled,
-                title: 'Nothing kept',
-                subtitle: 'Nothing has been removed from this folder by syncing.',
+                title: _listed ? 'Nothing kept' : 'Listing…',
+                subtitle: _listed ? 'Nothing has been removed from this folder by syncing.' : '',
               ),
             for (final k in _kept)
               SettingsTile(
@@ -61,10 +80,11 @@ class _SyncKeptPageState extends State<SyncKeptPage> {
                   IconButton(
                     icon: const Icon(Icons.restore),
                     tooltip: 'Restore',
-                    onPressed: () {
-                      final ok = widget.state.sync.restoreKept(widget.id, '${k['kept']}');
+                    onPressed: () async {
+                      final ok = await widget.state.sync.restoreKept(widget.id, '${k['kept']}');
+                      if (!mounted) return;
                       _tell(ok ? 'Restored ${k['path']}.' : 'Could not restore it.');
-                      _refresh();
+                      await _refresh();
                     },
                   ),
                   IconButton(
@@ -87,10 +107,10 @@ class _SyncKeptPageState extends State<SyncKeptPage> {
                         ),
                       );
                       if (ok != true || !mounted) return;
-                      if (!widget.state.sync.discardKept(widget.id, '${k['kept']}')) {
-                        _tell('Could not delete it.');
-                      }
-                      _refresh();
+                      final gone = await widget.state.sync.discardKept(widget.id, '${k['kept']}');
+                      if (!mounted) return;
+                      if (!gone) _tell('Could not delete it.');
+                      await _refresh();
                     },
                   ),
                 ]),
