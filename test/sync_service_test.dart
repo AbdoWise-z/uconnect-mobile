@@ -170,6 +170,22 @@ Uint8List randomBytes(int n, int seed) {
 
 int conflictsOf(Node n) => (n.status['conflicts'] as List?)?.length ?? 0;
 
+// path -> state, as the user would see it.
+Map<String, String> statesOf(Node n) =>
+    {for (final r in n.svc.files(kFolder)) '${r['path']}': '${r['state']}'};
+
+Map<String, Object?> rowOf(Node n, String path) =>
+    n.svc.files(kFolder).where((r) => r['path'] == path).firstOrNull ?? const {};
+
+Map<String, Object?> memberOf(Node n, String key) {
+  for (final m in (n.status['members'] as List?) ?? const []) {
+    if (m is Map && m['key'] == key) return m.cast<String, Object?>();
+  }
+  return const {};
+}
+
+int intOf(Map<String, Object?> m, String key) => (m[key] as num?)?.toInt() ?? 0;
+
 List<String> filesIn(String dir) => [
       for (final e in Directory(dir).listSync())
         if (e is File) baseName(e.path)
@@ -582,5 +598,307 @@ void main() {
     if (linked) {
       expect(File(at(0, 'escape/secret.txt')).existsSync(), isFalse); // bob's link is not synced
     }
+  }, timeout: const Timeout(Duration(seconds: 60)));
+
+  // --- what the user sees ---------------------------------------------------------------
+
+  test('lists files with their state', () async {
+    net.add('alice');
+    net.add('bob');
+    final a = net.nodes[0], b = net.nodes[1];
+    writeText(at(0, 'a.txt'), 'alpha');
+    writeText(at(0, 'sub/b.txt'), 'bravo');
+    writeText(at(0, 'x.log'), 'log');
+    writeText(at(0, 'mine.txt'), 'mine');
+    writeText(at(0, '.syncignore'), '*.log\n');
+    writeText(at(0, '.syncskip'), 'mine.txt\n');
+    net.join(0);
+    net.join(1);
+    // Alone: everything of hers is still to be sent to bob.
+    await eventually(() => statesOf(a).containsKey('sub/b.txt'));
+    var states = statesOf(a);
+    expect(states['a.txt'], 'send');
+    expect(states['sub/b.txt'], 'send');
+    expect(states['sub'], 'send');
+    expect(states['x.log'], 'ignored');
+    expect(rowOf(a, 'x.log')['detail'], '*.log');
+    expect(states['mine.txt'], 'skipped');
+    expect(rowOf(a, 'mine.txt')['detail'], 'mine.txt');
+    expect(rowOf(a, 'sub')['dir'], isTrue);
+    expect(rowOf(a, 'a.txt')['size'], 5);
+    await eventually(() => intOf(memberOf(a, b.key), 'toSendFiles') == 3);
+    expect(memberOf(a, b.key)['online'], isFalse);
+
+    net.link(0, 1);
+    await eventually(() => contents(at(1, 'sub/b.txt')) == 'bravo');
+    await eventually(() => statesOf(a)['sub/b.txt'] == 'synced');
+    states = statesOf(a);
+    expect(states['a.txt'], 'synced');
+    expect(states['.syncignore'], 'synced');
+    expect(states['x.log'], 'ignored');
+    expect(states['mine.txt'], 'skipped');
+    expect(states.containsKey('.syncskip'), isFalse);
+    states = statesOf(b);
+    expect(states['a.txt'], 'synced');
+    expect(states.containsKey('x.log'), isFalse); // never came, and is not here
+    expect(states.containsKey('mine.txt'), isFalse);
+    await eventually(() => intOf(memberOf(a, b.key), 'toSendFiles') == 0);
+    expect(memberOf(a, b.key)['online'], isTrue);
+    await eventually(() => intOf(memberOf(a, b.key), 'lastInSync') > 0);
+    // Skipped before it ever synced, mine.txt is in nobody's index.
+    expect(intOf(memberOf(b, a.key), 'skipped'), 0);
+
+    // A path in depth.
+    final info = b.svc.fileInfo(kFolder, 'a.txt');
+    expect(info['state'], 'synced');
+    expect((info['holders'] as List).length, 1);
+    expect((info['version'] as Map).length, 1);
+
+    // Bob's copy of the index outlives the connection: what he has yet to
+    // fetch waits for alice to come back.
+    net.unlink(0, 1);
+    writeText(at(0, 'late.txt'), 'late');
+    await eventually(() => statesOf(a)['late.txt'] == 'send');
+    await eventually(() => intOf(memberOf(a, b.key), 'toSendFiles') == 1);
+    final c = net.config(1);
+    b.svc.setFolders([
+      FolderConfig(id: c.id, label: c.label, path: c.path, paused: true, peers: c.peers)
+    ]); // takes the index, fetches nothing
+    net.link(0, 1);
+    await eventually(
+        () => (b.svc.fileInfo(kFolder, 'late.txt')['holders'] as List? ?? []).isNotEmpty);
+    net.unlink(0, 1);
+    net.join(1);
+    await eventually(() => statesOf(b)['late.txt'] == 'receive');
+    expect(rowOf(b, 'late.txt')['detail'], 'waiting');
+    await eventually(() => intOf(memberOf(b, a.key), 'toReceiveFiles') == 1);
+    expect(File(at(1, 'late.txt')).existsSync(), isFalse);
+    net.link(0, 1);
+    await eventually(() => contents(at(1, 'late.txt')) == 'late');
+    await eventually(() => statesOf(b)['late.txt'] == 'synced');
+  }, timeout: const Timeout(Duration(seconds: 90)));
+
+  test('holds back large deletes', () async {
+    net.add('alice');
+    net.add('bob');
+    final a = net.nodes[0], b = net.nodes[1];
+    for (var i = 0; i < 12; i++) {
+      writeText(at(0, 'f$i.txt'), 'file');
+    }
+    net.join(0);
+    net.join(1);
+    net.link(0, 1);
+    await eventually(() => contents(at(1, 'f11.txt')) == 'file', timeout: const Duration(seconds: 20));
+    await eventually(() => intOf(b.status, 'files') == 12);
+
+    // Alice wipes most of her copy: bob keeps his files and asks.
+    for (var i = 0; i < 11; i++) {
+      File(at(0, 'f$i.txt')).deleteSync();
+    }
+    await eventually(() => intOf(b.status, 'pendingDeleteCount') == 11);
+    await eventually(() => b.events.join(';').contains(' deletes:11'));
+    await wait(500);
+    expect(contents(at(1, 'f0.txt')), 'file');
+    expect((b.status['pendingDeletes'] as List).length, 11);
+
+    // Keeping them makes them bob's changes: alice gets them back.
+    b.svc.confirmDeletes(kFolder, false);
+    await eventually(() => contents(at(0, 'f0.txt')) == 'file', timeout: const Duration(seconds: 20));
+    await eventually(() => contents(at(0, 'f10.txt')) == 'file', timeout: const Duration(seconds: 20));
+    await eventually(() => intOf(b.status, 'pendingDeleteCount') == 0);
+    expect(intOf(b.status, 'files'), 12);
+
+    // Deleting them again, and this time letting it happen.
+    await eventually(() => intOf(a.status, 'files') == 12);
+    await wait(300);
+    for (var i = 0; i < 11; i++) {
+      File(at(0, 'f$i.txt')).deleteSync();
+    }
+    await eventually(() => intOf(b.status, 'pendingDeleteCount') == 11);
+    b.svc.confirmDeletes(kFolder, true);
+    await eventually(() => !File(at(1, 'f0.txt')).existsSync());
+    await eventually(() => intOf(b.status, 'files') == 1);
+    expect(contents(at(1, 'f11.txt')), 'file');
+    expect(intOf(b.status, 'pendingDeleteCount'), 0);
+
+    // A few deletes in a big folder pass without asking.
+    for (var i = 0; i < 40; i++) {
+      writeText(at(0, 'g$i.txt'), 'more');
+    }
+    await eventually(() => intOf(b.status, 'files') == 41, timeout: const Duration(seconds: 20));
+    await wait(300);
+    for (var i = 0; i < 5; i++) {
+      File(at(0, 'g$i.txt')).deleteSync();
+    }
+    await eventually(() => intOf(b.status, 'files') == 36);
+    expect(intOf(b.status, 'pendingDeleteCount'), 0);
+  }, timeout: const Timeout(Duration(seconds: 120)));
+
+  test('keeps and restores kept files', () async {
+    net.add('alice');
+    net.add('bob');
+    final b = net.nodes[1];
+    writeText(at(0, 'docs/x.txt'), 'first');
+    writeText(at(0, 'y.txt'), 'why');
+    net.join(0);
+    net.join(1);
+    net.link(0, 1);
+    await eventually(() => contents(at(1, 'docs/x.txt')) == 'first');
+    await eventually(() => contents(at(1, 'y.txt')) == 'why');
+    await wait(300);
+    File(at(0, 'docs/x.txt')).deleteSync();
+    await eventually(() => !File(at(1, 'docs/x.txt')).existsSync());
+
+    await eventually(() => b.svc.keptFiles(kFolder).length == 1);
+    final kept = b.svc.keptFiles(kFolder).first;
+    expect(kept['path'], 'docs/x.txt');
+    expect(kept['size'], 5);
+    expect('${kept['kept']}'.startsWith('docs/x~'), isTrue);
+    expect(intOf(kept, 'time') > 0, isTrue);
+    expect((b.svc.fileInfo(kFolder, 'docs/x.txt')['kept'] as List).length, 1);
+
+    // Restored, it is bob's change: alice gets it back.
+    expect(b.svc.restoreKept(kFolder, '${kept['kept']}'), isTrue);
+    expect(contents(at(1, 'docs/x.txt')), 'first');
+    await eventually(() => contents(at(0, 'docs/x.txt')) == 'first', timeout: const Duration(seconds: 20));
+    expect(b.svc.keptFiles(kFolder).length, 0);
+    expect(b.svc.restoreKept(kFolder, '../y.txt'), isFalse); // never out of .synctrash
+    expect(contents(at(1, 'y.txt')), 'why');
+
+    // Discarding one.
+    await wait(300);
+    File(at(0, 'y.txt')).deleteSync();
+    await eventually(() => b.svc.keptFiles(kFolder).length == 1);
+    expect(b.svc.discardKept(kFolder, '${b.svc.keptFiles(kFolder).first['kept']}'), isTrue);
+    expect(b.svc.keptFiles(kFolder).length, 0);
+  }, timeout: const Timeout(Duration(seconds: 90)));
+
+  test('previews and saves rules', () async {
+    net.add('alice');
+    net.add('bob');
+    final a = net.nodes[0], b = net.nodes[1];
+    writeText(at(0, 'a.txt'), 'a');
+    writeText(at(0, 'b.log'), 'b');
+    writeText(at(0, 'docs/c.txt'), 'c');
+    writeText(at(0, 'docs/d.log'), 'd');
+    net.join(0);
+    net.join(1);
+    net.link(0, 1);
+    await eventually(() => contents(at(1, 'docs/d.log')) == 'd');
+
+    final preview = a.svc.previewRules(kFolder, false, '*.log\n!\n/docs/\n', probe: 'docs/new.txt');
+    expect((preview['problems'] as List).length, 1);
+    expect(((preview['problems'] as List).first as Map)['line'], 2);
+    expect(preview['stop'], 3); // b.log, docs/c.txt, docs/d.log
+    expect(preview['resume'], 0);
+    final matches = {
+      for (final m in (preview['matches'] as List).cast<Map>()) '${m['path']}': m
+    };
+    expect(matches['b.log']!['line'], 1);
+    expect(matches['docs']!['line'], 3);
+    expect(matches['docs/c.txt']!['via'], 'docs');
+    expect(matches.containsKey('a.txt'), isFalse);
+    final probe = preview['probe'] as Map;
+    expect(probe['line'], 3);
+    expect(probe['excluded'], isTrue);
+
+    expect(a.svc.saveRules(kFolder, false, '*.log\n'), isTrue);
+    expect(a.svc.rulesText(kFolder, false), '*.log\n');
+    await eventually(() => contents(at(1, '.syncignore')) == '*.log\n');
+    await eventually(() => statesOf(a)['b.log'] == 'ignored');
+    await eventually(() => statesOf(b)['docs/d.log'] == 'ignored');
+    expect(File(at(1, 'docs/d.log')).existsSync(), isTrue); // ignoring never deletes
+    // Left out now, it would come back without the rule.
+    expect(a.svc.previewRules(kFolder, false, '')['resume'], 2);
+
+    // "Skip on this device" for one file.
+    expect(b.svc.addRule(kFolder, true, 'docs/c.txt'), isTrue);
+    expect(b.svc.rulesText(kFolder, true), '/docs/c.txt\n');
+    await eventually(() => statesOf(b)['docs/c.txt'] == 'skipped');
+    expect(rowOf(b, 'docs/c.txt')['detail'], '/docs/c.txt');
+    await wait(600);
+    expect(File(at(0, '.syncskip')).existsSync(), isFalse);
+    expect(statesOf(a)['docs/c.txt'], 'synced');
+    // Alice sees that bob holds one path back.
+    await eventually(() => intOf(memberOf(a, b.key), 'skipped') == 1);
+  }, timeout: const Timeout(Duration(seconds: 90)));
+
+  test('pauses one device', () async {
+    net.add('alice');
+    net.add('bob');
+    final a = net.nodes[0], b = net.nodes[1];
+    writeText(at(0, 'a.txt'), 'a');
+    net.join(0);
+    net.join(1);
+    net.link(0, 1);
+    await eventually(() => contents(at(1, 'a.txt')) == 'a');
+
+    FolderConfig withPause(bool paused) {
+      final c = net.config(0);
+      return FolderConfig(id: c.id, label: c.label, path: c.path, peers: {
+        b.key: Grant(receive: true, contribute: true, paused: paused),
+      });
+    }
+
+    a.svc.setFolders([withPause(true)]);
+    await eventually(() => memberOf(a, b.key)['paused'] == true);
+    // Bob, no longer offered the folder, forgets alice's index of it.
+    await eventually(
+        () => (b.svc.fileInfo(kFolder, 'a.txt')['holders'] as List? ?? [1]).isEmpty);
+    writeText(at(0, 'b.txt'), 'b');
+    writeText(at(1, 'c.txt'), 'c');
+    await eventually(() => statesOf(a)['b.txt'] == 'synced'); // nobody to send to
+    await wait(1500);
+    expect(File(at(1, 'b.txt')).existsSync(), isFalse);
+    expect(File(at(0, 'c.txt')).existsSync(), isFalse);
+
+    a.svc.setFolders([withPause(false)]);
+    await eventually(() => contents(at(1, 'b.txt')) == 'b');
+    await eventually(() => contents(at(0, 'c.txt')) == 'c');
+  }, timeout: const Timeout(Duration(seconds: 60)));
+
+  test('lists transfers', () async {
+    net.add('alice');
+    net.add('bob');
+    final a = net.nodes[0], b = net.nodes[1];
+    final big = randomBytes(6 * 1024 * 1024, 3);
+    write(at(0, 'big.bin'), big);
+    net.join(0);
+    net.join(1);
+    net.link(0, 1);
+    var seen = false;
+    for (var i = 0; i < 400 && !seen; i++) {
+      await wait(10);
+      for (final t in b.svc.transfers()) {
+        if (t['path'] != 'big.bin' || t['active'] != true) continue;
+        seen = true;
+        expect(t['folder'], kFolder);
+        expect(t['size'], big.length);
+        expect(t['key'], a.key);
+        expect(intOf(t, 'done') <= big.length, isTrue);
+      }
+    }
+    expect(seen, isTrue);
+    await eventually(() => bytesOf(at(1, 'big.bin')).length == big.length,
+        timeout: const Duration(seconds: 30));
+    await eventually(() => b.svc.transfers().isEmpty);
+    expect(intOf(memberOf(b, a.key), 'rate') >= 0, isTrue);
+  }, timeout: const Timeout(Duration(seconds: 90)));
+
+  test('waits while suspended', () async {
+    net.add('alice');
+    net.add('bob');
+    final b = net.nodes[1];
+    writeText(at(0, 'a.txt'), 'a');
+    net.join(0);
+    net.join(1);
+    b.svc.suspended = 'wifi';
+    net.link(0, 1);
+    await eventually(() => b.status['state'] == 'waiting');
+    expect(b.status['reason'], 'wifi');
+    await wait(1500);
+    expect(File(at(1, 'a.txt')).existsSync(), isFalse);
+    b.svc.suspended = '';
+    await eventually(() => contents(at(1, 'a.txt')) == 'a');
   }, timeout: const Timeout(Duration(seconds: 60)));
 }

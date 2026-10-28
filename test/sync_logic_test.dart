@@ -327,6 +327,70 @@ void main() {
     expect(g.remotes[kBob]!.entries.length, 1);
   });
 
+  test('keeps what it knows of each member across restarts', () {
+    final dir = Directory.systemTemp.createTempSync('sync_state');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final state = '${dir.path}${Platform.pathSeparator}f.json';
+    final f = SyncFolder(config(), 'A', state);
+    f.peerStats[kBob] = PeerStats(lastSeen: 1000, lastInSync: 2000, sentSeq: 3);
+    expect(f.save(), isTrue);
+    final g = SyncFolder(config(), 'A', state);
+    expect(g.load(), isTrue);
+    expect(g.peerStats[kBob]!.lastSeen, 1000);
+    expect(g.peerStats[kBob]!.lastInSync, 2000);
+    expect(g.peerStats[kBob]!.sentSeq, 3);
+  });
+
+  // The editor shows which line decided a path, and which lines are no use.
+  test('explains rules', () {
+    final r = IgnoreRules('# comment\n*.tmp\n!keep.tmp\n/build\n\n!\ncache/\n');
+    expect(r.problems.length, 1);
+    expect(r.problems.first.line, 6);
+    expect(r.problems.first.pattern, '!');
+
+    var m = r.explain('a.tmp', false);
+    expect(m.line, 2);
+    expect(m.pattern, '*.tmp');
+    expect(m.negate, isFalse);
+    expect(m.via, '');
+    expect(m.excluded, isTrue);
+
+    m = r.explain('keep.tmp', false); // brought back by the later line
+    expect(m.line, 3);
+    expect(m.negate, isTrue);
+    expect(m.excluded, isFalse);
+
+    m = r.explain('build/out/keep.tmp', false); // the folder above decides
+    expect(m.line, 4);
+    expect(m.via, 'build');
+    expect(m.negate, isFalse);
+
+    expect(r.explain('x/cache', false).line, 0); // folders only: a file of that name is free
+    expect(r.explain('x/cache', true).line, 7);
+    expect(r.explain('readme.md', false).line, 0);
+    expect(IgnoreRules().explain('a.tmp', false).line, 0);
+  });
+
+  // A paused member is sent nothing and nothing is taken from it, but its
+  // grants stay for when it resumes.
+  test('paused grants grant nothing', () {
+    const g = Grant(receive: true, contribute: true, paused: true);
+    expect(g.receive && g.contribute, isTrue);
+    expect(g.sends || g.accepts, isFalse);
+    const h = Grant(receive: true, contribute: true);
+    expect(h.sends && h.accepts, isTrue);
+    expect(g == h, isFalse);
+
+    final c = config(peers: {
+      kBob: const Grant(receive: true, contribute: true, paused: true),
+    });
+    final f = SyncFolder(c, 'A', '${Directory.systemTemp.path}${Platform.pathSeparator}p.json');
+    f.applyRemote(kBob, '1', true, [file('new.txt', 'theirs', {'B': 1})]);
+    expect(f.decide('new.txt', neverConnected).kind, DecisionKind.none);
+    f.config = config(peers: {kBob: const Grant(receive: true, contribute: true)});
+    expect(f.decide('new.txt', neverConnected).kind, DecisionKind.apply);
+  });
+
   test('reads epochs as unsigned 64-bit decimals', () {
     expect(canonicalEpoch('18446744073709551615'), '18446744073709551615');
     expect(canonicalEpoch('18446744073709551616'), '0');

@@ -38,6 +38,7 @@ class SyncEvent {
   final String folderId;
   final String path;
   final String kind;
+  final DateTime time = DateTime.now();
   @override
   String toString() => '$path $kind';
 }
@@ -51,6 +52,54 @@ const _pumpBudget = 8 * 1024 * 1024; // bytes sent per turn
 const _requestTimeoutMs = 30000;
 const _saveEveryMs = 2000;
 const _cleanEveryMs = 3600 * 1000;
+const _rateWindowMs = 5000; // rates are averaged over this long
+const _emitEveryMs = 400; // progress reaches the UI this often
+const _freeEveryMs = 10000; // how often the disk's free space is read
+const _maxListed = 5000; // rule-preview matches reported
+// A kept file's name: <base>~yyyyMMdd-HHmmss[ (n)][.ext]
+final _keptName = RegExp(r'^(.*)~(\d{8}-\d{6})(?: \(\d+\))?(\.[^.]*)?$');
+
+Map<String, Object?> _versionMap(VersionVector v) =>
+    {for (final e in v.entries) e.key: e.value};
+
+int _doneOf(FileEntry target, int missing) {
+  final done = (target.blocks.length - missing) * target.blockSize;
+  return done > target.size ? target.size : done;
+}
+
+int? _keptStamp(String stamp) {
+  final parsed = DateTime.tryParse(
+      '${stamp.substring(0, 4)}-${stamp.substring(4, 6)}-${stamp.substring(6, 8)}T'
+      '${stamp.substring(9, 11)}:${stamp.substring(11, 13)}:${stamp.substring(13, 15)}');
+  return parsed?.millisecondsSinceEpoch;
+}
+
+/// Bytes moved lately, to give a rate.
+class _Meter {
+  final _samples = <(int, int)>[]; // (when, bytes)
+  void add(int now, int bytes) {
+    _samples.add((now, bytes));
+    while (_samples.isNotEmpty && now - _samples.first.$1 > _rateWindowMs) {
+      _samples.removeAt(0);
+    }
+  }
+
+  /// Bytes per second over the last seconds.
+  int rate(int now) {
+    var sum = 0;
+    for (final (at, bytes) in _samples) {
+      if (now - at <= _rateWindowMs) sum += bytes;
+    }
+    return sum ~/ (_rateWindowMs ~/ 1000);
+  }
+}
+
+/// What a member still lacks from us, or we from it, as of the last plan.
+class _Need {
+  int sendFiles = 0, sendBytes = 0, sendChanges = 0;
+  int receiveFiles = 0, receiveBytes = 0, receiveChanges = 0;
+  int skipped = 0; // paths it holds back
+}
 
 class _Pull {
   _Pull(this.target, this.sources, this.temp, this.file);
@@ -80,7 +129,18 @@ class _Folder {
   List<Map<String, Object?>> conflicts = [];
   List<Map<String, Object?>> held = []; // [{path, reason}]: present here but not synced
   String lastStatus = '';
+  String lastState = '';
+  int lastEmit = -1 << 30;
   int needFiles = 0, needBytes = 0;
+  List<String> queued = []; // files to fetch that have not started
+  Map<String, LeftOut> leftOut = {}; // by the last scan
+  // The large-delete guard.
+  List<String> pendingDeletes = [];
+  final approvedDeletes = <String>{};
+  int free = -1; // bytes left on the disk, looked up now and then
+  int nextFree = 0;
+  bool freePending = false;
+  final needs = <String, _Need>{}; // by key
 }
 
 class _Out {
@@ -106,6 +166,10 @@ class _Peer {
   final heard = <String>{}; // folders whose index it has sent us
   final queue = Queue<_Out>();
   int inflight = 0; // block requests to it
+  final received = _Meter(), served = _Meter();
+  String serving = ''; // the file it last asked a block of
+  String servingFolder = '';
+  int servedAt = -1 << 30;
 }
 
 class _Request {
@@ -246,10 +310,12 @@ class SyncService {
     required int Function(String dev) connectedSince,
     required String myKeyHex,
     required String stateDir,
+    Future<int> Function(String path)? freeSpace,
   })  : _sendControl = sendControl,
         _sendData = sendData,
         _peerKey = peerKey,
         _since = connectedSince,
+        _freeSpace = freeSpace,
         _me = memberIdOf(myKeyHex),
         _stateDir = stateDir {
     try {
@@ -264,6 +330,7 @@ class SyncService {
   final bool Function(String, int, Uint8List) _sendData;
   final String? Function(String) _peerKey;
   final int Function(String) _since;
+  final Future<int> Function(String)? _freeSpace;
   final String _me;
   final String _stateDir;
 
@@ -271,6 +338,23 @@ class SyncService {
   int scanIntervalMs = 10000;
   int stableAfterMs = 2000;
   int keepDays = 30; // files kept in .synctrash go after this many days
+  // The large-delete guard: holds back a round of deletes of at least
+  // [guardMin] paths that is also at least [guardShare] of the folder's
+  // files, or [guardMany] paths however large the folder. 0 turns it off.
+  int guardMin = 10;
+  int guardMany = 25;
+  double guardShare = 0.5;
+
+  /// Why every folder waits ("wifi", "charging"), or empty: syncing goes on.
+  String get suspended => _suspended;
+  String _suspended = '';
+  set suspended(String reason) {
+    if (reason == _suspended) return;
+    _suspended = reason;
+    for (final id in _folders.keys) {
+      _emitStatus(id);
+    }
+  }
 
   final _clock = Stopwatch();
   int get _now => _clock.elapsedMilliseconds;
@@ -334,11 +418,21 @@ class SyncService {
     }
     for (final c in configs) {
       final f = _folders[c.id];
+      var before = const <String, Grant>{};
       if (f != null) {
+        before = f.state.config.peers;
         f.state.config = c;
         f.replan = true;
       } else {
         _openFolder(c);
+      }
+      // A peer that is no longer sent the folder stops getting its index
+      // (the offers tell it to forget what it had); one whose grants changed
+      // is greeted again, so both sides learn where they stand.
+      for (final peer in _peers.values) {
+        final g = c.grantOf(peer.key);
+        if (!g.sends) peer.listening.remove(c.id);
+        if (g != (before[peer.key] ?? const Grant())) peer.helloSent.remove(c.id);
       }
     }
     for (final dev in _peers.keys.toList()) {
@@ -371,8 +465,18 @@ class SyncService {
     }
     _sendOffers(dev);
     _sendHellos(dev);
+    _sawPeer(key);
+  }
+
+  // Remembers when a member was last connected.
+  void _sawPeer(String key) {
+    final now = DateTime.now().millisecondsSinceEpoch;
     for (final f in _folders.values) {
       f.replan = true;
+      if (f.state.config.peers.containsKey(key)) {
+        (f.state.peerStats[key] ??= PeerStats()).lastSeen = now;
+        f.dirty = true;
+      }
     }
   }
 
@@ -389,9 +493,7 @@ class SyncService {
     _peers.remove(dev);
     if (_devOfKey[peer.key] == dev) _devOfKey.remove(peer.key);
     if (!_offers.isClosed) _offers.add(SyncOffers(peer.key, const []));
-    for (final f in _folders.values) {
-      f.replan = true;
-    }
+    _sawPeer(peer.key);
   }
 
   int _sinceOf(String key) {
@@ -404,7 +506,7 @@ class SyncService {
     if (peer == null) return;
     final offers = [
       for (final e in _folders.entries)
-        if (e.value.state.config.grantOf(peer.key).receive)
+        if (e.value.state.config.grantOf(peer.key).sends)
           {'id': e.key, 'label': e.value.state.config.label}
     ];
     _enqueue(dev, _Out.control({'t': 'sync.offers', 'folders': offers}));
@@ -416,7 +518,7 @@ class SyncService {
     if (peer == null) return;
     _folders.forEach((id, f) {
       final g = f.state.config.grantOf(peer.key);
-      if ((!g.receive && !g.contribute) || peer.helloSent.contains(id)) return;
+      if ((!g.sends && !g.accepts) || peer.helloSent.contains(id)) return;
       peer.helloSent.add(id);
       final r = f.state.remotes[peer.key];
       _enqueue(
@@ -439,7 +541,7 @@ class SyncService {
     final f = _folders[id];
     if (f == null) return;
     final g = f.state.config.grantOf(peer.key);
-    if (g.receive) {
+    if (g.sends) {
       // It has our index up to `seen`, unless our index started over since.
       final same = msg['peerEpoch'] == f.state.epochString;
       final seen = _integer(msg['seen']) ?? 0;
@@ -450,9 +552,9 @@ class SyncService {
     // Our hello may have arrived before it had this folder: until its index
     // comes, answer with ours so it knows to send it. Replies are not
     // answered, so two devices cannot keep this going.
-    final reply = msg['reply'] != true && g.contribute && !peer.heard.contains(id);
+    final reply = msg['reply'] != true && g.accepts && !peer.heard.contains(id);
     if (reply) peer.helloSent.remove(id);
-    if (g.receive || g.contribute) _sendHellos(dev, reply);
+    if (g.sends || g.accepts) _sendHellos(dev, reply);
   }
 
   void _sendIndex(String dev, String folderId, bool full) {
@@ -488,6 +590,12 @@ class SyncService {
     }
     if (batch.isNotEmpty || (full && first)) flush();
     peer.sent[folderId] = f.state.seq;
+    final stats = f.state.peerStats[peer.key] ??= PeerStats();
+    if (stats.sentSeq != f.state.seq) {
+      stats.sentSeq = f.state.seq;
+      f.dirty = true;
+      f.replan = true; // what the peer still lacks changed
+    }
   }
 
   void _onIndex(String dev, Map<String, Object?> msg) {
@@ -495,7 +603,7 @@ class SyncService {
     if (peer == null) return;
     final id = msg['folder'] is String ? msg['folder'] as String : '';
     final f = _folders[id];
-    if (f == null || !f.state.config.grantOf(peer.key).contribute) return;
+    if (f == null || !f.state.config.grantOf(peer.key).accepts) return;
     peer.heard.add(id);
     final entries = <FileEntry>[];
     final list = msg['entries'];
@@ -558,13 +666,27 @@ class SyncService {
     }
     for (final id in _folders.keys.toList()) {
       final f = _folders[id];
-      if (f == null || f.state.config.paused) continue;
+      if (f == null || f.state.config.paused || _suspended.isNotEmpty) continue;
       // Planning need not wait for a scan: a scan's result leaves alone
       // whatever changed after it began.
       if (f.replan) _plan(id);
       if (now >= f.nextCleanup) _cleanKept(id);
       if (!f.scanning && (f.rescanSoon || now >= f.nextScan)) _startScan(id);
       _requestBlocks(id);
+      if (now >= f.nextFree && !f.freePending) {
+        f.nextFree = now + _freeEveryMs;
+        final ask = _freeSpace;
+        if (ask == null || f.root.isEmpty) {
+          f.free = -1;
+        } else {
+          f.freePending = true;
+          ask(f.root).then((v) {
+            f.free = v;
+          }, onError: (Object _) {
+            f.free = -1;
+          }).whenComplete(() => f.freePending = false);
+        }
+      }
     }
     for (final e in _peers.entries.toList()) {
       for (final id in e.value.listening.toList()) {
@@ -603,6 +725,7 @@ class SyncService {
       g.scanning = false;
       if (!result.ok) return;
       if (g.state.applyScan(result, seqAtStart) > 0) g.dirty = true;
+      g.leftOut = result.leftOut;
       g.blocked.clear(); // what was in the way may be gone
       g.replan = true;
     }, onError: (Object _) {
@@ -770,6 +893,7 @@ class SyncService {
     // from files here, which may be the very files about to go.
     f.needFiles = 0;
     f.needBytes = 0;
+    f.queued = [];
     var allStarted = true;
     var newRules = false;
     for (final d in files) {
@@ -783,23 +907,119 @@ class SyncService {
           allStarted = false;
         }
       }
+      if (!f.pulls.containsKey(path)) f.queued.add(path);
       if (path == kIgnoreFile && f.pulls.containsKey(path)) newRules = true;
     }
     // Deletes bottom-up, once every fetch has taken what it needs from here,
     // and not while new ignore rules are on the way: what they ignore is not
-    // to be deleted here.
+    // to be deleted here. A round that would remove much of the folder at
+    // once (a device wiped its copy, say) waits for the user instead.
+    final pending = <String>[];
+    var applied = 0;
     if (allStarted && !newRules) {
       deletes.sort((a, b) => b.target.path.compareTo(a.target.path));
-      for (final d in deletes) {
-        _apply(f, folderId, d);
+      var live = 0;
+      for (final e in f.state.local.values) {
+        if (!e.deleted) live++;
       }
+      final n = deletes.length;
+      final guarded = guardMin > 0 &&
+          n >= guardMin &&
+          (n >= guardMany || n >= guardShare * (live < 1 ? 1 : live));
+      for (final d in deletes) {
+        if (guarded && !f.approvedDeletes.contains(d.target.path)) {
+          pending.add(d.target.path);
+          continue;
+        }
+        _apply(f, folderId, d);
+        f.approvedDeletes.remove(d.target.path);
+        applied++;
+      }
+      if (pending.isEmpty) f.approvedDeletes.clear();
     } else if (deletes.isNotEmpty) {
       f.replan = true;
     }
-    if (adopts.isNotEmpty || dirs.isNotEmpty || deletes.isNotEmpty) {
+    pending.sort();
+    if (pending.isNotEmpty) {
+      final signature = 'deletes|${pending.join('|')}';
+      if (f.logged.add(signature)) _event(folderId, '', 'deletes:${pending.length}');
+    }
+    f.pendingDeletes = pending;
+    if (adopts.isNotEmpty || dirs.isNotEmpty || applied > 0) {
       f.dirty = true;
       f.replan = true; // settles in another round
     }
+
+    // What each member still lacks from us, or we from it; and when there
+    // was nothing either way while it was connected.
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    f.state.config.peers.forEach((key, g) {
+      final need = _Need();
+      if (g.sends) {
+        for (final e in f.state.local.values) {
+          if (e.skipped || !_pendingFor(f, e, key)) continue;
+          if (e.deleted || e.dir) {
+            need.sendChanges++;
+          } else {
+            need.sendFiles++;
+            need.sendBytes += e.size;
+          }
+        }
+      }
+      if (g.accepts) {
+        for (final d in files) {
+          if (d.sources.contains(key)) {
+            need.receiveFiles++;
+            need.receiveBytes += d.target.size;
+          }
+        }
+        for (final d in deletes) {
+          if (d.sources.contains(key) || d.following == key) need.receiveChanges++;
+        }
+        for (final d in dirs) {
+          if (d.following == key) need.receiveChanges++;
+        }
+      }
+      final r = f.state.remotes[key];
+      if (r != null) {
+        for (final e in r.entries.values) {
+          if (e.skipped) need.skipped++;
+        }
+      }
+      f.needs[key] = need;
+      if (need.sendFiles + need.sendChanges + need.receiveFiles + need.receiveChanges == 0 &&
+          _devOfKey.containsKey(key) &&
+          !f.scanning) {
+        final stats = f.state.peerStats[key] ??= PeerStats();
+        if (nowMs ~/ 60000 != stats.lastInSync ~/ 60000) f.dirty = true; // saved once a minute
+        stats.lastInSync = nowMs;
+      }
+    });
+    f.needs.removeWhere((key, _) => !f.state.config.peers.containsKey(key));
+  }
+
+  // Whether a change of ours (its entry) has yet to reach the peer with `key`:
+  // by its index when it sends us one, else by how far ours reached it.
+  bool _pendingFor(_Folder f, FileEntry e, String key) {
+    final r = f.state.remotes[key];
+    if (r != null) {
+      final theirs = r.entries[e.path];
+      if (theirs == null) return !e.deleted;
+      if (theirs.skipped) return false;
+      return compareVersions(theirs.version, e.version) == Order.older;
+    }
+    var sentSeq = f.state.peerStats[key]?.sentSeq ?? 0;
+    final peer = _peerOf(key);
+    if (peer != null) {
+      final live = peer.sent[f.state.config.id] ?? 0;
+      if (live > sentSeq) sentSeq = live;
+    }
+    return e.seq > sentSeq;
+  }
+
+  _Peer? _peerOf(String key) {
+    final dev = _devOfKey[key];
+    return dev == null ? null : _peers[dev];
   }
 
   // Moves the file at `from` to `to.path`, if the disk still holds what the
@@ -1128,7 +1348,10 @@ class SyncService {
     pull.requested.remove(r.block);
     pull.lastProgress = _now;
     final peer = _peers[dev];
-    if (peer != null) peer.inflight--;
+    if (peer != null) {
+      peer.inflight--;
+      peer.received.add(_now, data.length);
+    }
     _requests.remove(requestId);
     if (pull.missing.isEmpty) _finishPull(r.folder, r.path);
   }
@@ -1260,7 +1483,7 @@ class SyncService {
     void refuse(String code) =>
         _enqueue(dev, _Out.control({'t': 'sync.err', 'id': id, 'code': code}));
     final f = _folders[msg['folder'] is String ? msg['folder'] as String : ''];
-    if (f == null || !f.state.config.grantOf(peer.key).receive) {
+    if (f == null || !f.state.config.grantOf(peer.key).sends) {
       return refuse('forbidden');
     }
     final path = msg['path'] is String ? msg['path'] as String : '';
@@ -1309,6 +1532,10 @@ class SyncService {
       final end = at + _frameSize < data.length ? at + _frameSize : data.length;
       _enqueue(dev, _Out.data(id, Uint8List.sublistView(data, at, end)));
     }
+    peer.served.add(_now, data.length);
+    peer.serving = path;
+    peer.servingFolder = msg['folder'] as String;
+    peer.servedAt = _now;
   }
 
   // --- messages -------------------------------------------------------------------------
@@ -1323,12 +1550,14 @@ class SyncService {
     switch (t) {
       case 'sync.offers':
         final offers = <Map<String, String>>[];
+        final offered = <String>{};
         final list = msg['folders'];
         if (list is List) {
           for (final v in list) {
             if (v is! Map) continue;
             final id = v['id'] is String ? v['id'] as String : '';
             if (id.length != 32 || hexToBytes(id).length != 16) continue;
+            offered.add(id);
             final label = v['label'] is String ? v['label'] as String : '';
             offers.add({
               'id': id,
@@ -1336,7 +1565,17 @@ class SyncService {
             });
           }
         }
-        if (!_offers.isClosed) _offers.add(SyncOffers(_peers[dev]!.key, offers));
+        // A folder it no longer sends us: what we held of its index is no
+        // longer ours to act on. Its next hello brings a full index.
+        final peer = _peers[dev]!;
+        _folders.forEach((id, f) {
+          if (offered.contains(id) || !f.state.remotes.containsKey(peer.key)) return;
+          f.state.remotes.remove(peer.key);
+          peer.heard.remove(id);
+          f.dirty = true;
+          f.replan = true;
+        });
+        if (!_offers.isClosed) _offers.add(SyncOffers(peer.key, offers));
       case 'sync.hello':
         _onHello(dev, msg);
       case 'sync.index':
@@ -1383,54 +1622,623 @@ class SyncService {
 
   // --- status -------------------------------------------------------------------------------
 
-  /// A folder's state: {id, state (paused | missing | syncing | scanning |
-  /// idle), files, bytes, needFiles, needBytes, conflicts: [{path, involved,
+  /// A folder's state: {id, state (paused | waiting | missing | syncing |
+  /// scanning | idle), reason (why it waits: wifi | charging), files, bytes,
+  /// dirs, free, needFiles, needBytes, conflicts: [{path, involved,
   /// following, waiting, candidates: [{key, mine, size, mtime, deleted,
-  /// dir}]}], blocked: {path: reason}, held: [{path, reason}]}; empty for an
-  /// unknown folder.
+  /// dir}]}], blocked: {path: reason}, held: [{path, reason}], members:
+  /// [{key, online, paused, toSendFiles, toSendBytes, toSendChanges,
+  /// toReceiveFiles, toReceiveBytes, toReceiveChanges, current, sending,
+  /// rate, sendRate, eta, skipped, lastSeen, lastInSync}], pendingDeletes:
+  /// [path], pendingDeleteCount, transfers: [{path, size, done, key}]};
+  /// empty for an unknown folder.
   Map<String, Object?> folderStatus(String id) {
     final f = _folders[id];
     if (f == null) return const {};
-    var files = 0, bytes = 0;
+    var files = 0, bytes = 0, dirs = 0;
     for (final e in f.state.local.values) {
-      if (e.deleted || e.dir) continue;
+      if (e.deleted) continue;
+      if (e.dir) {
+        dirs++;
+        continue;
+      }
       files++;
       bytes += e.size;
     }
     var fetched = 0;
-    for (final p in f.pulls.values) {
-      fetched += (p.target.blocks.length - p.missing.length) * p.target.blockSize;
-    }
+    final transfers = <Map<String, Object?>>[];
+    f.pulls.forEach((path, p) {
+      fetched += _doneOf(p.target, p.missing.length);
+      transfers.add({
+        'path': path,
+        'size': p.target.size,
+        'done': _doneOf(p.target, p.missing.length),
+        'key': _sourceOf(id, path, p),
+      });
+    });
     final state = f.state.config.paused
         ? 'paused'
-        : f.root.isEmpty
-            ? 'missing'
-            : f.needFiles > 0
-                ? 'syncing'
-                : f.scanning
-                    ? 'scanning'
-                    : 'idle';
+        : _suspended.isNotEmpty
+            ? 'waiting'
+            : f.root.isEmpty
+                ? 'missing'
+                : f.needFiles > 0
+                    ? 'syncing'
+                    : f.scanning
+                        ? 'scanning'
+                        : 'idle';
     final need = f.needBytes - fetched;
     return {
       'id': id,
       'state': state,
+      'reason': _suspended,
       'files': files,
       'bytes': bytes,
+      'dirs': dirs,
+      'free': f.free,
       'needFiles': f.needFiles,
       'needBytes': need < 0 ? 0 : need,
       'conflicts': f.conflicts,
       'blocked': Map<String, String>.of(f.blocked),
       'held': f.held,
+      'members': _memberStatus(id, f),
+      'pendingDeletes': f.pendingDeletes.take(200).toList(),
+      'pendingDeleteCount': f.pendingDeletes.length,
+      'transfers': transfers,
     };
+  }
+
+  // The key of the peer a block of `path` was last asked of, else the first
+  // connected holder.
+  String _sourceOf(String folderId, String path, _Pull p) {
+    for (final r in _requests.values.toList().reversed) {
+      if (r.folder == folderId && r.path == path) {
+        final peer = _peers[r.dev];
+        if (peer != null) return peer.key;
+      }
+    }
+    for (final source in p.sources) {
+      if (_devOfKey.containsKey(source)) return source;
+    }
+    return '';
+  }
+
+  List<Map<String, Object?>> _memberStatus(String folderId, _Folder f) {
+    final out = <Map<String, Object?>>[];
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final now = _now;
+    final keys = f.state.config.peers.keys.toList()..sort();
+    for (final key in keys) {
+      final g = f.state.config.grantOf(key);
+      final peer = _peerOf(key);
+      final need = f.needs[key] ?? _Need();
+      final stats = f.state.peerStats[key];
+      // What is on its way from it does not count as left.
+      var receiveBytes = need.receiveBytes;
+      for (final p in f.pulls.values) {
+        if (p.sources.contains(key)) receiveBytes -= _doneOf(p.target, p.missing.length);
+      }
+      if (receiveBytes < 0) receiveBytes = 0;
+      var current = '';
+      var sending = false;
+      if (peer != null) {
+        final dev = _devOfKey[key];
+        for (final r in _requests.values.toList().reversed) {
+          if (r.dev == dev && r.folder == folderId) {
+            current = r.path;
+            break;
+          }
+        }
+        if (current.isEmpty && peer.servingFolder == folderId && now - peer.servedAt < 3000) {
+          current = peer.serving;
+          sending = true;
+        }
+      }
+      final rate = peer?.received.rate(now) ?? 0;
+      final sendRate = peer?.served.rate(now) ?? 0;
+      out.add({
+        'key': key,
+        'online': peer != null,
+        'paused': g.paused,
+        'toSendFiles': need.sendFiles,
+        'toSendBytes': need.sendBytes,
+        'toSendChanges': need.sendChanges,
+        'toReceiveFiles': need.receiveFiles,
+        'toReceiveBytes': receiveBytes,
+        'toReceiveChanges': need.receiveChanges,
+        'current': current,
+        'sending': sending,
+        'rate': rate,
+        'sendRate': sendRate,
+        'eta': rate > 0 && receiveBytes > 0 ? receiveBytes ~/ rate : -1,
+        'skipped': need.skipped,
+        'lastSeen': peer != null ? nowMs : (stats?.lastSeen ?? 0),
+        'lastInSync': stats?.lastInSync ?? 0,
+      });
+    }
+    return out;
   }
 
   void _emitStatus(String id) {
     final f = _folders[id];
     if (f == null) return;
-    final status = jsonEncode(folderStatus(id));
-    if (status == f.lastStatus) return;
-    f.lastStatus = status;
+    final status = folderStatus(id);
+    final encoded = jsonEncode(status);
+    if (encoded == f.lastStatus) return;
+    // Progress alone need not reach the UI with every block.
+    final state = '${status['state']}';
+    if (state == f.lastState && _now - f.lastEmit < _emitEveryMs) return;
+    f.lastEmit = _now;
+    f.lastState = state;
+    f.lastStatus = encoded;
     if (!_folderChanged.isClosed) _folderChanged.add(id);
+  }
+
+  // --- the folder as the user sees it ---------------------------------------------------
+
+  /// Everything in the folder as sync sees it, sorted by path: [{path, name,
+  /// dir, size, mtime, state, progress, detail, version: {memberId: n}}].
+  /// `state`: synced | send (a change of ours some device has not got yet;
+  /// `detail` how many) | receive (a change to fetch; `detail` "waiting" when
+  /// no device online has it, "delete" for one to remove) | transferring
+  /// (`progress` 0..1) | conflict | ignored (.syncignore) | skipped
+  /// (.syncskip; for both, `detail` is the pattern) | held (not syncable
+  /// here; `detail` the reason, see SyncFolder.heldReason()) | blocked
+  /// (`detail` the reason, as in the "blocked:" events).
+  List<Map<String, Object?>> files(String folderId) {
+    final f = _folders[folderId];
+    if (f == null) return const [];
+    final s = f.state;
+    final conflicts = {for (final c in f.conflicts) '${c['path']}'};
+    final sendKeys = [
+      for (final e in s.config.peers.entries)
+        if (e.value.sends) e.key
+    ];
+    final sorted = {...f.leftOut.keys, ...s.allPaths()}.toList()..sort();
+
+    final out = <Map<String, Object?>>[];
+    for (final path in sorted) {
+      final row = <String, Object?>{
+        'path': path,
+        'name': path.substring(path.lastIndexOf('/') + 1),
+      };
+      void fill(FileEntry e) {
+        row['dir'] = e.dir;
+        row['size'] = e.size;
+        row['mtime'] = e.mtime;
+        row['version'] = _versionMap(e.version);
+      }
+
+      var state = '', detail = '';
+      var progress = -1.0;
+      final local = s.local[path];
+      final mine = local != null && !local.deleted;
+      if (mine) fill(local);
+
+      final left = f.leftOut[path];
+      if (left != null) {
+        row['dir'] = left.dir;
+        row['size'] = left.size;
+        row['mtime'] = 0;
+        row['version'] ??= const <String, Object?>{};
+        state = left.skip ? 'skipped' : 'ignored';
+        detail = (left.skip ? s.skip : s.ignore).explain(path, left.dir).pattern;
+      } else {
+        var isDir = mine && local.dir;
+        for (final r in s.remotes.values) {
+          if (r.entries[path]?.dir == true) isDir = true;
+        }
+        final d = s.decide(path, _sinceOf);
+        final pull = f.pulls[path];
+        final blockedReason = f.blocked[path];
+        if (!s.participates(path, isDir)) {
+          if (!mine) {
+            // Only other devices have it; here the rules leave it out.
+            for (final r in s.remotes.values) {
+              final e = r.entries[path];
+              if (e != null && !e.deleted) {
+                fill(e);
+                break;
+              }
+            }
+            if (!row.containsKey('dir')) continue;
+          }
+          final ignored = s.ignore.matches(path, isDir);
+          state = ignored ? 'ignored' : 'skipped';
+          detail = (ignored ? s.ignore : s.skip).explain(path, isDir).pattern;
+        } else if (conflicts.contains(path) ||
+            (d.kind == DecisionKind.conflict && !d.apply)) {
+          if (!mine) {
+            for (final c in d.candidates) {
+              if (!c.entry.deleted) {
+                fill(c.entry);
+                break;
+              }
+            }
+          }
+          if (!row.containsKey('dir')) {
+            fill(d.candidates.isEmpty ? FileEntry() : d.candidates.first.entry);
+          }
+          state = 'conflict';
+        } else if (pull != null) {
+          fill(pull.target);
+          final online = pull.sources.any(_devOfKey.containsKey);
+          if (online) {
+            state = 'transferring';
+            progress = pull.target.size > 0
+                ? _doneOf(pull.target, pull.missing.length) / pull.target.size
+                : 1.0;
+          } else {
+            state = 'receive';
+            detail = 'waiting';
+          }
+        } else if (blockedReason != null) {
+          if (!mine) fill(d.target);
+          state = 'blocked';
+          detail = blockedReason;
+        } else if (mine && local.skipped) {
+          state = 'held';
+          detail = s.heldReason(path);
+          if (detail.isEmpty) {
+            state = 'skipped';
+            detail = s.skip.explain(path, local.dir).pattern;
+          }
+        } else if (d.kind == DecisionKind.apply ||
+            (d.kind == DecisionKind.conflict && d.apply)) {
+          if (d.target.deleted) {
+            if (!mine) continue;
+            state = 'receive';
+            detail = 'delete';
+          } else {
+            if (!mine) fill(d.target);
+            state = 'receive';
+            if (!d.sources.any(_devOfKey.containsKey)) detail = 'waiting';
+          }
+        } else if (mine) {
+          var lacking = 0;
+          for (final key in sendKeys) {
+            if (_pendingFor(f, local, key)) lacking++;
+          }
+          state = lacking > 0 ? 'send' : 'synced';
+          if (lacking > 0) detail = '$lacking';
+        } else {
+          continue; // a tombstone, or nothing to do
+        }
+      }
+      row['state'] = state;
+      row['detail'] = detail;
+      row['progress'] = progress;
+      out.add(row);
+    }
+    return out;
+  }
+
+  /// One path in depth: {path, dir, deleted, size, mtime, hash, version,
+  /// skipped, state, detail, progress, holders: [{key, size, mtime, version,
+  /// deleted, dir, skipped, hash}], kept: [{kept, path, time, size}]}.
+  Map<String, Object?> fileInfo(String folderId, String path) {
+    final f = _folders[folderId];
+    if (f == null) return const {};
+    final s = f.state;
+    final out = <String, Object?>{'path': path};
+    final l = s.local[path];
+    if (l != null) {
+      out['dir'] = l.dir;
+      out['deleted'] = l.deleted;
+      out['size'] = l.size;
+      out['mtime'] = l.mtime;
+      out['hash'] = bytesToHex(l.hash);
+      out['version'] = _versionMap(l.version);
+      out['skipped'] = l.skipped;
+    }
+    final holders = <Map<String, Object?>>[];
+    final keys = s.remotes.keys.toList()..sort();
+    for (final key in keys) {
+      final e = s.remotes[key]!.entries[path];
+      if (e == null) continue;
+      holders.add({
+        'key': key,
+        'size': e.size,
+        'mtime': e.mtime,
+        'version': _versionMap(e.version),
+        'deleted': e.deleted,
+        'dir': e.dir,
+        'skipped': e.skipped,
+        'hash': bytesToHex(e.hash),
+      });
+    }
+    out['holders'] = holders;
+    out['kept'] = [
+      for (final k in keptFiles(folderId))
+        if (k['path'] == path) k
+    ];
+    for (final row in files(folderId)) {
+      if (row['path'] != path) continue;
+      out['state'] = row['state'];
+      out['detail'] = row['detail'];
+      out['progress'] = row['progress'];
+      if (!out.containsKey('dir')) {
+        out['dir'] = row['dir'];
+        out['size'] = row['size'];
+        out['mtime'] = row['mtime'];
+        out['version'] = row['version'];
+      }
+      break;
+    }
+    return out;
+  }
+
+  // --- rules ------------------------------------------------------------------------------
+
+  String _rulesPath(_Folder f, bool skipFile) =>
+      joinPath(f.root, skipFile ? kSkipFile : kIgnoreFile);
+
+  /// .syncignore (`skipFile` false) or .syncskip (true), as on disk.
+  String rulesText(String folderId, bool skipFile) {
+    final f = _folders[folderId];
+    if (f == null || f.root.isEmpty) return '';
+    return readSmallFile(_rulesPath(f, skipFile));
+  }
+
+  /// What `text` would do as the folder's rules: {problems: [{line,
+  /// pattern}], matches: [{path, dir, line, pattern, negate, via}] for every
+  /// known path a rule decides, stop: files synced now that would stop,
+  /// resume: files left out now that would sync, probe: {path, dir, line,
+  /// pattern, negate, via, excluded} for `probe`}.
+  Map<String, Object?> previewRules(String folderId, bool skipFile, String text,
+      {String probe = ''}) {
+    final f = _folders[folderId];
+    if (f == null) return const {};
+    final s = f.state;
+    final rules = IgnoreRules(text);
+    final other = skipFile ? s.ignore : s.skip; // the file not being edited, as it is
+
+    final dirs = <String, bool>{};
+    final paths = <String>{...f.leftOut.keys};
+    for (final e in s.local.values) {
+      if (e.deleted) continue;
+      paths.add(e.path);
+      dirs[e.path] = e.dir;
+    }
+    for (final r in s.remotes.values) {
+      for (final e in r.entries.values) {
+        if (e.deleted) continue;
+        paths.add(e.path);
+        dirs.putIfAbsent(e.path, () => e.dir);
+      }
+    }
+    f.leftOut.forEach((path, l) => dirs.putIfAbsent(path, () => l.dir));
+    final sorted = paths.toList()..sort();
+
+    final matches = <Map<String, Object?>>[];
+    var stop = 0, resume = 0;
+    for (final path in sorted) {
+      final dir = dirs[path] ?? false;
+      final m = rules.explain(path, dir);
+      if (m.line > 0 && matches.length < _maxListed) {
+        matches.add({'path': path, 'dir': dir, ...m.toJson()});
+      }
+      if (dir) continue;
+      final wouldBeOut = rules.matches(path, false) || other.matches(path, false);
+      final local = s.local[path];
+      final syncedNow =
+          local != null && !local.deleted && !local.skipped && s.participates(path);
+      if (syncedNow && wouldBeOut) stop++;
+      final left = f.leftOut[path];
+      if (left != null && left.skip == skipFile && !wouldBeOut) resume++;
+    }
+    final out = <String, Object?>{
+      'problems': [for (final p in rules.problems) p.toJson()],
+      'matches': matches,
+      'stop': stop,
+      'resume': resume,
+    };
+    if (probe.isNotEmpty) {
+      var p = probe.trim().replaceAll('\\', '/');
+      while (p.startsWith('/')) {
+        p = p.substring(1);
+      }
+      final dir = p.endsWith('/') || (dirs[p] ?? false);
+      while (p.endsWith('/')) {
+        p = p.substring(0, p.length - 1);
+      }
+      final m = rules.explain(p, dir);
+      out['probe'] = {'path': p, 'dir': dir, ...m.toJson(), 'excluded': m.excluded};
+    }
+    return out;
+  }
+
+  /// Writes the rules file; the folder is scanned again with them.
+  bool saveRules(String folderId, bool skipFile, String text) {
+    final f = _folders[folderId];
+    if (f == null || f.root.isEmpty) return false;
+    final path = _rulesPath(f, skipFile);
+    try {
+      final tmp = File('$path.tmp');
+      tmp.writeAsStringSync(text, flush: true);
+      tmp.renameSync(path);
+    } on FileSystemException {
+      return false;
+    }
+    f.rescanSoon = true;
+    f.replan = true;
+    return true;
+  }
+
+  /// Adds a pattern matching exactly `path` ("Ignore everywhere" / "Skip on
+  /// this device").
+  bool addRule(String folderId, bool skipFile, String path) {
+    final f = _folders[folderId];
+    if (f == null || f.root.isEmpty || !isValidSyncPath(path)) return false;
+    var text = rulesText(folderId, skipFile);
+    if (text.isNotEmpty && !text.endsWith('\n')) text += '\n';
+    text += '${exactPattern(path)}\n';
+    return saveRules(folderId, skipFile, text);
+  }
+
+  // --- kept files -------------------------------------------------------------------------
+
+  /// Files syncing set aside in .synctrash: [{kept (its path there), path
+  /// (where it was), time, size}], newest first.
+  List<Map<String, Object?>> keptFiles(String folderId) {
+    final f = _folders[folderId];
+    if (f == null || f.root.isEmpty) return const [];
+    final root = joinPath(f.root, kKeptDir);
+    if (!Directory(root).existsSync()) return const [];
+    final out = <Map<String, Object?>>[];
+    void walk(String dir, String rel) {
+      List<FileSystemEntity> children;
+      try {
+        children = Directory(dir).listSync(followLinks: false);
+      } on FileSystemException {
+        return;
+      }
+      for (final fe in children) {
+        if (fe is Link) continue;
+        final name = baseName(fe.path);
+        final child = rel.isEmpty ? name : '$rel/$name';
+        if (fe is Directory) {
+          walk(fe.path, child);
+          continue;
+        }
+        final FileStat st;
+        try {
+          st = fe.statSync();
+        } on FileSystemException {
+          continue;
+        }
+        var original = name;
+        var when = st.modified.millisecondsSinceEpoch;
+        final m = _keptName.firstMatch(name);
+        if (m != null) {
+          original = '${m.group(1)}${m.group(3) ?? ''}';
+          when = _keptStamp(m.group(2)!) ?? when;
+        }
+        out.add({
+          'kept': child,
+          'path': rel.isEmpty ? original : '$rel/$original',
+          'time': when,
+          'size': st.size,
+        });
+      }
+    }
+
+    walk(root, '');
+    out.sort((a, b) => (b['time'] as int).compareTo(a['time'] as int));
+    return out;
+  }
+
+  /// Puts a kept file back where it was (beside what is there now, if
+  /// anything), as a new change of ours.
+  bool restoreKept(String folderId, String kept) {
+    final f = _folders[folderId];
+    if (f == null || f.root.isEmpty) return false;
+    final keptRoot = joinPath(f.root, kKeptDir);
+    final source = joinPath(keptRoot, kept);
+    final real = realPath(source);
+    if (real.isEmpty ||
+        !_isWithin(real, keptRoot) ||
+        FileSystemEntity.typeSync(source, followLinks: false) != FileSystemEntityType.file) {
+      return false;
+    }
+    final name = baseName(source);
+    final m = _keptName.firstMatch(name);
+    final original = m == null ? name : '${m.group(1)}${m.group(3) ?? ''}';
+    final slash = kept.lastIndexOf('/');
+    final relDir = slash < 0 ? '' : kept.substring(0, slash);
+    final relPath = relDir.isEmpty ? original : '$relDir/$original';
+    if (!isValidSyncPath(relPath) || !_safeParent(f, relPath, true)) return false;
+    final target = _uniquePath(_dirName(_absolute(f, relPath)), original);
+    try {
+      File(source).renameSync(target);
+    } on FileSystemException {
+      return false;
+    }
+    f.rescanSoon = true; // it comes back as a change of ours
+    return true;
+  }
+
+  bool discardKept(String folderId, String kept) {
+    final f = _folders[folderId];
+    if (f == null || f.root.isEmpty) return false;
+    final keptRoot = joinPath(f.root, kKeptDir);
+    final source = joinPath(keptRoot, kept);
+    final real = realPath(source);
+    if (real.isEmpty ||
+        !_isWithin(real, keptRoot) ||
+        FileSystemEntity.typeSync(source, followLinks: false) != FileSystemEntityType.file) {
+      return false;
+    }
+    try {
+      File(source).deleteSync();
+      return true;
+    } on FileSystemException {
+      return false;
+    }
+  }
+
+  // --- held deletes, transfers --------------------------------------------------------------
+
+  /// Deletes held back by the large-delete guard (`pendingDeletes`): apply
+  /// them, or keep the files, which makes them changes of ours that the
+  /// other devices take back.
+  void confirmDeletes(String folderId, bool apply) {
+    final f = _folders[folderId];
+    if (f == null || f.pendingDeletes.isEmpty) return;
+    if (apply) {
+      f.approvedDeletes.addAll(f.pendingDeletes);
+    } else {
+      for (final path in f.pendingDeletes) {
+        f.state.keepMine(path);
+      }
+    }
+    f.pendingDeletes = [];
+    f.dirty = true;
+    f.replan = true;
+  }
+
+  /// Transfers across every folder: [{folder, path, size, done, key,
+  /// active}], active ones first, then what waits its turn.
+  List<Map<String, Object?>> transfers() {
+    final out = <Map<String, Object?>>[];
+    final queued = <Map<String, Object?>>[];
+    _folders.forEach((id, f) {
+      f.pulls.forEach((path, p) {
+        out.add({
+          'folder': id,
+          'path': path,
+          'size': p.target.size,
+          'done': _doneOf(p.target, p.missing.length),
+          'key': _sourceOf(id, path, p),
+          'active': true,
+        });
+      });
+      for (final path in f.queued) {
+        var size = 0;
+        for (final r in f.state.remotes.values) {
+          final e = r.entries[path];
+          if (e != null && !e.deleted) size = e.size;
+        }
+        queued.add({
+          'folder': id,
+          'path': path,
+          'size': size,
+          'done': 0,
+          'key': '',
+          'active': false,
+        });
+      }
+    });
+    return out..addAll(queued);
+  }
+
+  /// Bytes per second fetched from every peer, over the last seconds.
+  int receiveRate() {
+    var rate = 0;
+    for (final p in _peers.values) {
+      rate += p.received.rate(_now);
+    }
+    return rate;
   }
 
   Future<void> dispose() async {

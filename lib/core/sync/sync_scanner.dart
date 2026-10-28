@@ -34,6 +34,16 @@ class ScanResult {
   // Present but named so that some member could not hold it: path ->
   // nameProblem(). Not synced; the user is told.
   final unsupported = <String, String>{};
+  // Present but left out by the rules (nothing inside a left-out folder is
+  // looked at): path -> what left it out.
+  final leftOut = <String, LeftOut>{};
+}
+
+class LeftOut {
+  const LeftOut({required this.dir, required this.size, required this.skip});
+  final bool dir;
+  final int size;
+  final bool skip; // .syncskip (this device only); else .syncignore
 }
 
 String readSmallFile(String path) {
@@ -128,7 +138,19 @@ class _Walker {
       if (name.startsWith(kPartPrefix)) continue;
       if (relDir.isEmpty && (name == kSkipFile || name == kKeptDir)) continue;
       final dir = fe is Directory;
-      if (ignore.matches(rel, dir) || skip.matches(rel, dir)) continue;
+      final ignored = ignore.matches(rel, dir);
+      if (ignored || skip.matches(rel, dir)) {
+        int size = 0;
+        if (!dir) {
+          try {
+            size = fe.statSync().size;
+          } on FileSystemException {
+            // unreadable; size unknown
+          }
+        }
+        out.leftOut[rel] = LeftOut(dir: dir, size: size, skip: !ignored);
+        continue;
+      }
       final problem = nameProblem(name);
       if (problem.isNotEmpty) {
         out.unsupported[rel] = problem; // and nothing inside it, if a folder

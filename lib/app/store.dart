@@ -114,6 +114,10 @@ class AppStore {
   final networkRules = <String, List<NetworkRule>>{};
   // Synced folders (core/sync): where each is here, and who takes part.
   List<FolderConfig> syncFolders = [];
+  // When folder sync may run, and whether its problems are notified.
+  bool syncWifiOnly = false;
+  bool syncChargingOnly = false;
+  bool syncNotify = true;
   List<SharedFolder> shares = [];
   // Colour scheme id (see ui/theme.dart): system, dark, darker, light, colorful.
   String colorScheme = 'dark';
@@ -165,6 +169,9 @@ class AppStore {
     screenShareMaxFps = number('screenShareMaxFps', 60);
     screenShareMaxBitrate = number('screenShareMaxBitrate', 16000000);
     cameraMaxBitrate = number('cameraMaxBitrate', 16000000);
+    syncWifiOnly = decoded['syncWifiOnly'] == true;
+    syncChargingOnly = decoded['syncChargingOnly'] == true;
+    syncNotify = decoded['syncNotify'] != false;
     colorScheme = decoded['colorScheme'] is String
         ? decoded['colorScheme'] as String
         : 'dark';
@@ -232,6 +239,9 @@ class AppStore {
       'defaults': defaultPermissions.toList()..sort(),
       'special': [for (final t in special.values) t.toJson()],
       'sync': [for (final f in syncFolders) folderConfigToJson(f)],
+      'syncWifiOnly': syncWifiOnly,
+      'syncChargingOnly': syncChargingOnly,
+      'syncNotify': syncNotify,
       'networkRules': {
         for (final e in networkRules.entries)
           if (e.value.isNotEmpty) e.key: networkRulesToJson(e.value)
@@ -255,7 +265,11 @@ Map<String, Object?> folderConfigToJson(FolderConfig c) => {
       'paused': c.paused,
       'peers': {
         for (final e in c.peers.entries)
-          e.key: {'receive': e.value.receive, 'contribute': e.value.contribute}
+          e.key: {
+            'receive': e.value.receive,
+            'contribute': e.value.contribute,
+            'paused': e.value.paused,
+          }
       },
     };
 
@@ -266,8 +280,10 @@ FolderConfig? folderConfigFromJson(Object? v) {
     for (final e in (v['peers'] as Map).entries) {
       final g = e.value;
       if (e.key is String && g is Map) {
-        peers[e.key as String] =
-            Grant(receive: g['receive'] == true, contribute: g['contribute'] == true);
+        peers[e.key as String] = Grant(
+            receive: g['receive'] == true,
+            contribute: g['contribute'] == true,
+            paused: g['paused'] == true);
       }
     }
   }

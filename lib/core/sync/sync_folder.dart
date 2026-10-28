@@ -13,17 +13,32 @@ import 'sync_scanner.dart';
 
 /// What this device allows one peer, for one folder.
 class Grant {
-  const Grant({this.receive = false, this.contribute = false});
+  const Grant({this.receive = false, this.contribute = false, this.paused = false});
   final bool receive; // send it this folder and our changes
   final bool contribute; // accept its changes
+  final bool paused; // neither, for now; the grants are kept
+
+  bool get sends => receive && !paused;
+  bool get accepts => contribute && !paused;
 
   @override
   bool operator ==(Object other) =>
       other is Grant &&
       other.receive == receive &&
-      other.contribute == contribute;
+      other.contribute == contribute &&
+      other.paused == paused;
   @override
-  int get hashCode => Object.hash(receive, contribute);
+  int get hashCode => Object.hash(receive, contribute, paused);
+}
+
+/// What is remembered about each member, ms since epoch: when it was last
+/// connected, when this device last had nothing to send it or take from it,
+/// and how far our index reached it.
+class PeerStats {
+  PeerStats({this.lastSeen = 0, this.lastInSync = 0, this.sentSeq = 0});
+  int lastSeen;
+  int lastInSync;
+  int sentSeq;
 }
 
 class FolderConfig {
@@ -120,6 +135,7 @@ class SyncFolder {
   int seq = 0; // the last change to the index
   final local = <String, FileEntry>{};
   final remotes = <String, Remote>{}; // by identity key
+  final peerStats = <String, PeerStats>{}; // by identity key
 
   String get epochString => '$epoch';
 
@@ -298,7 +314,7 @@ class SyncFolder {
     final l = local[path];
     if (l != null && !l.skipped) all.add(Candidate('', l));
     remotes.forEach((key, r) {
-      if (!config.grantOf(key).contribute) return;
+      if (!config.grantOf(key).accepts) return;
       final e = r.entries[path];
       if (e != null && !e.skipped) all.add(Candidate(key, e));
     });
@@ -309,7 +325,7 @@ class SyncFolder {
     final out = <String>[];
     if (content.deleted || content.dir) return out;
     remotes.forEach((key, r) {
-      if (!config.grantOf(key).contribute) return;
+      if (!config.grantOf(key).accepts) return;
       final e = r.entries[content.path];
       if (e != null && !e.skipped && e.sameContent(content)) out.add(key);
     });
@@ -530,6 +546,17 @@ class SyncFolder {
         if (e is Map) forced[path.toString()] = FileEntry.fromStorage(e.cast<String, Object?>());
       });
     }
+    peerStats.clear();
+    final ps = decoded['peers'];
+    if (ps is Map) {
+      ps.forEach((key, v) {
+        if (v is! Map) return;
+        peerStats[key.toString()] = PeerStats(
+            lastSeen: v['lastSeen'] is int ? v['lastSeen'] as int : 0,
+            lastInSync: v['lastInSync'] is int ? v['lastInSync'] as int : 0,
+            sentSeq: v['sentSeq'] is int ? v['sentSeq'] as int : 0);
+      });
+    }
     return true;
   }
 
@@ -547,6 +574,14 @@ class SyncFolder {
           }
       },
       'forced': {for (final f in forced.entries) f.key: f.value.toStorage()},
+      'peers': {
+        for (final p in peerStats.entries)
+          p.key: {
+            'lastSeen': p.value.lastSeen,
+            'lastInSync': p.value.lastInSync,
+            'sentSeq': p.value.sentSeq,
+          }
+      },
     };
     try {
       final tmp = File('$stateFile.tmp');
