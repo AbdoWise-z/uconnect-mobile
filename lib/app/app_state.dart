@@ -124,7 +124,7 @@ class AppState extends ChangeNotifier {
 
   // --- invite links (QR codes / uconn:// links opening the app) --------------
 
-  late final _inviteLinks = InviteLinks((link) => unawaited(_onInviteLink(link)));
+  late final _inviteLinks = InviteLinks((link) => unawaited(handleInviteLink(link)));
 
   /// An invite link that arrived before the rendezvous server was set: the
   /// connect page fills it in (see takePendingInvite).
@@ -143,7 +143,9 @@ class AppState extends ChangeNotifier {
         ?.showSnackBar(SnackBar(content: Text(text)));
   }
 
-  Future<void> _onInviteLink(String raw) async {
+  /// Joins the topic of an invite link: one scanned from a QR code (the
+  /// scanner page, or the system camera opening the app), or a tapped link.
+  Future<void> handleInviteLink(String raw) async {
     final link = raw.trim();
     final creds = TopicCreds.parse(link);
     if (creds == null) {

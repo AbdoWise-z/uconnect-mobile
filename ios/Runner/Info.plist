@@ -87,5 +87,9 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>uConnect uses the camera to scan a topic's invite QR code, and to share this camera with your other devices.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>uConnect reads a picture you choose to find a topic's invite QR code in it.</string>
 </dict>
 </plist>

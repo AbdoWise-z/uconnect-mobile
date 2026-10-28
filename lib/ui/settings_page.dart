@@ -18,6 +18,7 @@ import '../core/identity.dart';
 import '../core/permissions.dart';
 import '../core/session.dart';
 import 'prompt_dialog.dart';
+import 'scan_page.dart';
 import 'network_rules_page.dart';
 import 'scheme_picker.dart';
 import 'screen_view.dart' show ViewQuality;
@@ -480,6 +481,15 @@ class _SettingsPageState extends State<SettingsPage> {
           ],
         ),
       SettingsSection(title: 'Topic', children: [
+        SettingsTile(
+          icon: Icons.qr_code_scanner,
+          title: 'Scan a QR code',
+          subtitle: 'Join the topic another device shows',
+          onTap: () async {
+            final link = await scanInviteLink(context);
+            if (link != null) await state.handleInviteLink(link);
+          },
+        ),
         SettingsTile(
           icon: Icons.swap_horiz,
           title: 'Join another topic',

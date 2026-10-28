@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../app/app_state.dart';
 import 'logo.dart';
+import 'scan_page.dart';
 import 'theme.dart';
 
 class ConnectPage extends StatefulWidget {
@@ -63,7 +64,8 @@ class _ConnectPageState extends State<ConnectPage> {
       return;
     }
     if (!link.startsWith('uconn://')) {
-      setState(() => _error = 'Paste a uconn:// invite link, or create a new topic.');
+      setState(() => _error =
+          'Scan a QR code, paste a uconn:// invite link, or create a new topic.');
       return;
     }
     setState(() => _busy = true);
@@ -85,6 +87,21 @@ class _ConnectPageState extends State<ConnectPage> {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final text = data?.text?.trim() ?? '';
     if (text.isNotEmpty) _link.text = text;
+  }
+
+  // The QR code another device shows for its topic: scan it, and join right
+  // away when the server is already known; otherwise the link waits in its
+  // field while the server is asked for.
+  Future<void> _scan() async {
+    final link = await scanInviteLink(context);
+    if (link == null || !mounted) return;
+    _link.text = link;
+    setState(() => _error = '');
+    if (_server.text.trim().contains(':')) {
+      await _connect();
+    } else {
+      setState(() => _error = 'Give the rendezvous server as host:port.');
+    }
   }
 
   Future<void> _rejoin() async {
@@ -183,7 +200,15 @@ class _ConnectPageState extends State<ConnectPage> {
                     ),
                     autocorrect: false,
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 12),
+                  FilledButton.tonalIcon(
+                    onPressed: _busy ? null : _scan,
+                    icon: const Icon(Icons.qr_code_scanner, size: 20),
+                    label: const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                      child: Text('Scan QR code'),
+                    ),
+                  ),
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton(

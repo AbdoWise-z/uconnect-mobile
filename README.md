@@ -17,8 +17,10 @@
 ## Features
 
 - **Topics and invite links.** Devices meet in a *topic*, shared by an
-  invite link. Scan a computer's invite QR code with the camera and uConnect
-  opens on it (`uconn://` links), or paste the link. Leave a topic at any
+  invite link. Scan a computer's invite QR code from the first page or
+  Settings › Topic (the app's own scanner, which also reads a code out of a
+  picture), with the system camera (`uconn://` links open the app), or paste
+  the link. Leave a topic at any
   time; the connect page offers to rejoin it.
 - **Your rules, per device.** Every service is behind a permission, and each
   device gets what all of these grant it, together:
