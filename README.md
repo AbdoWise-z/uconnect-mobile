@@ -172,8 +172,21 @@ powershell -File scripts/e2e-android.ps1
 | Be controlled                     | ✓ (accessibility service) | — |
 | Invite links and QR codes         | ✓ | ✓ (untested) |
 
-iOS needs the uconnect library built as a static XCFramework and a Mac to
-build on; the Dart side is platform-independent and ready for it.
+iOS builds and starts (first built 2026-11-20: Xcode 27.2, Flutter 3.50.1, the
+iOS 27.2 simulator, and an unsigned device build), and nothing past the first
+screen has been tried there yet. The uconnect library is a dynamic framework
+the app embeds. Build it once on the Mac, and again whenever the revision
+pinned in `native/CMakeLists.txt` changes, before the first build of the app:
+
+```sh
+sh scripts/build-ios.sh      # needs Xcode, CMake and Ninja
+flutter build ios --simulator --debug
+```
+
+Without it Xcode stops with "There is no XCFramework found at
+.../native/build-ios/uconnect_c.xcframework". Only invite links have native
+iOS code so far; the other platform channels (background service, notifications,
+video, screen and camera sharing, being controlled) are Android-only.
 
 ## Known issues and next up
 
@@ -193,7 +206,8 @@ Where the app stands (updated 2026-10-28):
   takes, a fetch reuses one index of local blocks per change rather than
   building its own, and the state file is written every 30 s while fetching.
 - **Open:** one viewer at a time when the phone shares; `test/app_smoke_test.dart`
-  hangs (pre-existing); iOS has not been built.
+  hangs (pre-existing); iOS builds and starts but is untested beyond its first
+  screen.
 - **Next up:** bandwidth probing when the encoder has little to send, temporal
   layering so the frame rate can drop without a resize.
 

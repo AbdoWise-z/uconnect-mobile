@@ -213,7 +213,10 @@ DynamicLibrary openUconnectLibrary() {
     return DynamicLibrary.open(override);
   }
   if (Platform.isAndroid) return DynamicLibrary.open('libuconnect_c.so');
-  if (Platform.isIOS) return DynamicLibrary.process(); // statically linked
+  // A dynamic framework embedded in the app bundle (scripts/build-ios.sh).
+  if (Platform.isIOS) {
+    return DynamicLibrary.open('uconnect_c.framework/uconnect_c');
+  }
   if (Platform.isWindows) return DynamicLibrary.open('uconnect_c.dll');
   if (Platform.isMacOS) return DynamicLibrary.open('libuconnect_c.dylib');
   return DynamicLibrary.open('libuconnect_c.so');
