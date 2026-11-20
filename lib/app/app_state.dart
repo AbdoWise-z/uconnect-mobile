@@ -28,15 +28,22 @@ import '../uconnect/uconnect.dart';
 import '../ui/format.dart';
 import '../ui/theme.dart';
 import 'background.dart';
+import 'container_paths.dart';
 import 'invite_links.dart';
 import 'store.dart';
 import 'sync_platform.dart';
 
 class AppState extends ChangeNotifier {
-  AppState(this.dataDir)
-      : store = AppStore('$dataDir${Platform.pathSeparator}state.json');
+  AppState(this.dataDir, {String? filesDir})
+      : filesDir = filesDir ?? dataDir,
+        store = AppStore('$dataDir${Platform.pathSeparator}state.json');
 
   final String dataDir;
+
+  /// Where files the user should be able to reach go: downloads and the
+  /// default shared folder. The data directory itself everywhere but iOS,
+  /// where that is hidden and Documents is what the Files app shows.
+  final String filesDir;
   final AppStore store;
   Identity? identity;
 
@@ -64,10 +71,26 @@ class AppState extends ChangeNotifier {
   late final power = PowerConditions(_applySyncConditions);
   final syncNotifier = SyncNotifier();
 
-  String get downloadsDir => '$dataDir${Platform.pathSeparator}downloads';
-  String get sharedDir => '$dataDir${Platform.pathSeparator}shared';
+  String get downloadsDir => '$filesDir${Platform.pathSeparator}downloads';
+  String get sharedDir => '$filesDir${Platform.pathSeparator}shared';
+
+  /// Why start-up stopped, when it did: shown in place of the app (main.dart)
+  /// rather than leaving the loading spinner up for good.
+  String initError = '';
+
+  void failStart(Object error, StackTrace stack) {
+    initError = error.toString();
+    debugPrint('uConnect could not start: $error\n$stack');
+    notifyListeners();
+  }
 
   Future<void> init() async {
+    if (Platform.isIOS) {
+      final container = iosContainerOf(filesDir);
+      if (container != null) {
+        store.mapPath = (p) => rebaseIosContainerPath(p, container);
+      }
+    }
     await store.load();
     screenHost =
         ScreenHost(session, capture, input, askConsent: _askScreenConsent);

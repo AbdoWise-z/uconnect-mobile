@@ -160,21 +160,35 @@ operations against a host peer.
 powershell -File scripts/e2e-android.ps1
 ```
 
+The same on an iOS simulator, from a Mac (it reaches the server on the Mac's
+own loopback, so nothing is forwarded). It runs that suite, then a second one
+that goes through the app's screens: join from the connect page, find the host
+in the device list, browse its share, download a file.
+
+```sh
+sh scripts/e2e-ios.sh              # the booted simulator, or name one
+E2E_HOLD=4 sh scripts/e2e-ios.sh   # rest on each screen, to watch or photograph
+```
+
 ## Platforms
 
 |                                   | Android 9+ | iOS |
 |-----------------------------------|:----------:|:---:|
-| Browse / download / upload        | ✓ | planned |
-| Share folders from the phone      | ✓ | planned |
-| Folder sync                       | ✓ | planned |
+| Browse / download / upload        | ✓ | ✓ (simulator only) |
+| Share folders from the phone      | ✓ | ✓ (untested) |
+| Folder sync                       | ✓ | untested |
 | Watch a screen or camera          | ✓ | planned |
 | Share the phone's screen / camera | ✓ | — |
 | Be controlled                     | ✓ (accessibility service) | — |
 | Invite links and QR codes         | ✓ | ✓ (untested) |
 
-iOS builds and starts (first built 2026-11-20: Xcode 27.2, Flutter 3.50.1, the
-iOS 27.2 simulator, and an unsigned device build), and nothing past the first
-screen has been tried there yet. The uconnect library is a dynamic framework
+iOS builds and runs in the simulator (first built 2026-11-20: Xcode 27.2,
+Flutter 3.50.1, iOS 27.2; a device build compiles unsigned but has not been on
+a phone). There it joins a topic, meets a desktop, and browses, downloads and
+uploads: `scripts/e2e-ios.sh` checks that. Downloads, the default shared folder
+and synced folders are in the app's Documents, which the Files app shows.
+Sharing the phone's own folders and folder sync use the same code as on
+Android but have not been tried on iOS. The uconnect library is a dynamic framework
 the app embeds. Build it once on the Mac, and again whenever the revision
 pinned in `native/CMakeLists.txt` changes, before the first build of the app:
 
@@ -206,8 +220,8 @@ Where the app stands (updated 2026-10-28):
   takes, a fetch reuses one index of local blocks per change rather than
   building its own, and the state file is written every 30 s while fetching.
 - **Open:** one viewer at a time when the phone shares; `test/app_smoke_test.dart`
-  hangs (pre-existing); iOS builds and starts but is untested beyond its first
-  screen.
+  hangs (pre-existing); iOS runs in the simulator only so far, with no video,
+  no notifications and nothing kept alive in the background.
 - **Next up:** bandwidth probing when the encoder has little to send, temporal
   layering so the frame rate can drop without a resize.
 

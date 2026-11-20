@@ -7,7 +7,6 @@
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'dart:io' show InternetAddress, Platform;
 import 'dart:typed_data';
 
@@ -239,8 +238,14 @@ class Session {
     _log.add(stamped);
     if (_log.length > 500) _log.removeRange(0, _log.length - 500);
     _logChanged.add(stamped);
-    if (kDebugMode) debugPrint('[session] $line'); // in logcat too while developing
+    debugMirror?.call('[session] $line');
   }
+
+  /// Where log lines are also sent while developing; the app points it at
+  /// debugPrint in debug builds (logcat, the Xcode console). A hook rather
+  /// than a Flutter import: this file must stay pure Dart, because
+  /// bin/host_peer.dart runs it on the plain Dart VM for the E2E scripts.
+  static void Function(String line)? debugMirror;
 
   void _notify() {
     if (!_changed.isClosed) _changed.add(null);

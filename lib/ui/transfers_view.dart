@@ -9,6 +9,7 @@ import 'package:share_plus/share_plus.dart';
 import '../app/app_state.dart';
 import '../core/session.dart';
 import '../core/storage/storage_client.dart';
+import 'share_origin.dart';
 import 'theme.dart';
 
 class TransfersView extends StatelessWidget {
@@ -105,15 +106,20 @@ class TransfersView extends StatelessWidget {
                   ? state.storageClient.cancelDownload(t)
                   : state.storageClient.cancelUpload(t),
             ),
-          TransferState.done when t.kind == TransferKind.download => IconButton(
-              icon: const Icon(Icons.ios_share, size: 20),
-              tooltip: 'Share / open',
-              onPressed: () async {
-                if (await File(t.localPath).exists()) {
-                  await SharePlus.instance
-                      .share(ShareParams(files: [XFile(t.localPath)]));
-                }
-              },
+          // Its own context, so an iPad anchors the share sheet to the button.
+          TransferState.done when t.kind == TransferKind.download => Builder(
+              builder: (button) => IconButton(
+                icon: const Icon(Icons.ios_share, size: 20),
+                tooltip: 'Share / open',
+                onPressed: () async {
+                  final origin = shareOrigin(button);
+                  if (await File(t.localPath).exists()) {
+                    await SharePlus.instance.share(ShareParams(
+                        files: [XFile(t.localPath)],
+                        sharePositionOrigin: origin));
+                  }
+                },
+              ),
             ),
           _ => null,
         },

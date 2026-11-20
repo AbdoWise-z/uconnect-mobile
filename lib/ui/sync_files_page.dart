@@ -14,6 +14,7 @@ import '../core/sync/sync_model.dart';
 import '../core/sync/sync_scanner.dart';
 import 'format.dart';
 import 'adaptive.dart';
+import 'share_origin.dart';
 import 'theme.dart';
 
 enum _Filter { all, pending, problems, left }
@@ -232,7 +233,9 @@ class _SyncFilesPageState extends State<SyncFilesPage> {
           await widget.state.sync.addRule(widget.id, true, path);
         }
       case 'share':
-        await SharePlus.instance.share(ShareParams(files: [XFile(abs)]));
+        // The menu this came from is gone; an iPad anchors to the page.
+        await SharePlus.instance.share(ShareParams(
+            files: [XFile(abs)], sharePositionOrigin: shareOrigin(context)));
     }
     if (mounted) unawaited(_load());
   }

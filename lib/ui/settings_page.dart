@@ -24,6 +24,7 @@ import 'network_rules_page.dart';
 import 'scheme_picker.dart';
 import 'screen_view.dart' show ViewQuality;
 import 'settings_widgets.dart';
+import 'share_origin.dart';
 import 'sync_folders_page.dart';
 import 'theme.dart';
 
@@ -515,11 +516,16 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                     const SizedBox(width: 10),
                     Expanded(
-                      child: FilledButton.icon(
-                        icon: const Icon(Icons.ios_share, size: 18),
-                        label: const Text('Share'),
-                        onPressed: () =>
-                            SharePlus.instance.share(ShareParams(text: uri)),
+                      // Its own context, so an iPad anchors the share sheet
+                      // to this button.
+                      child: Builder(
+                        builder: (button) => FilledButton.icon(
+                          icon: const Icon(Icons.ios_share, size: 18),
+                          label: const Text('Share'),
+                          onPressed: () => SharePlus.instance.share(ShareParams(
+                              text: uri,
+                              sharePositionOrigin: shareOrigin(button))),
+                        ),
                       ),
                     ),
                   ],

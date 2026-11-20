@@ -1,18 +1,32 @@
 
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'app/app_state.dart';
+import 'core/session.dart';
 import 'ui/connect_page.dart';
 import 'ui/theme.dart';
 import 'ui/workspace_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // The session log in logcat / the Xcode console too while developing.
+  if (kDebugMode) Session.debugMirror = debugPrint;
   final dir = await getApplicationSupportDirectory();
-  final state = AppState(dir.path);
+  // iOS hides Application Support from the user; Documents is the folder the
+  // Files app shows (as "uConnect", next to the synced folders).
+  final files =
+      Platform.isIOS ? await getApplicationDocumentsDirectory() : dir;
+  final state = AppState(dir.path, filesDir: files.path);
   runApp(UConnectApp(state));
-  await state.init();
+  try {
+    await state.init();
+  } on Object catch (e, stack) {
+    state.failStart(e, stack);
+  }
 }
 
 class UConnectApp extends StatefulWidget {
@@ -78,6 +92,9 @@ class _UConnectAppState extends State<UConnectApp> with WidgetsBindingObserver {
           debugShowCheckedModeBanner: false,
           home: Builder(
             builder: (context) {
+              if (state.initError.isNotEmpty) {
+                return _StartFailed(state.initError);
+              }
               if (!state.loaded) {
                 return const Scaffold(
                   body: Center(child: CircularProgressIndicator()),
@@ -91,6 +108,42 @@ class _UConnectAppState extends State<UConnectApp> with WidgetsBindingObserver {
           ),
         );
       },
+    );
+  }
+}
+
+/// Start-up stopped with an error (AppState.init threw). Says so, with the
+/// error to copy, where the loading spinner would otherwise turn for ever.
+class _StartFailed extends StatelessWidget {
+  const _StartFailed(this.error);
+
+  final String error;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.error_outline, size: 40, color: UcColors.text),
+                const SizedBox(height: 16),
+                Text('uConnect could not start',
+                    style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 12),
+                SelectableText(
+                  error,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: UcColors.textSecondary),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

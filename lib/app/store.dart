@@ -124,6 +124,18 @@ class AppStore {
   // Colour scheme id (see ui/theme.dart): system, dark, darker, light, colorful.
   String colorScheme = 'dark';
 
+  /// Applied to every folder path read from the file. iOS sets it to move
+  /// paths saved under an earlier app container (see container_paths.dart).
+  String Function(String path) mapPath = _samePath;
+  static String _samePath(String path) => path;
+
+  FolderConfig _mapped(FolderConfig c) {
+    final p = mapPath(c.path);
+    if (p == c.path) return c;
+    return FolderConfig(
+        id: c.id, label: c.label, path: p, paused: c.paused, peers: c.peers);
+  }
+
   Future<void> load() async {
     final file = File(path);
     if (!await file.exists()) return;
@@ -196,7 +208,7 @@ class AppStore {
     syncFolders = [
       if (decoded['sync'] is List)
         for (final f in decoded['sync'] as List)
-          if (folderConfigFromJson(f) case final c?) c
+          if (folderConfigFromJson(f) case final c?) _mapped(c)
     ];
     networkRules.clear();
     final rules = decoded['networkRules'];
@@ -209,7 +221,7 @@ class AppStore {
       if (decoded['shares'] is List)
         for (final s in decoded['shares'] as List)
           if (s is Map && s['name'] is String && s['path'] is String)
-            SharedFolder(s['name'] as String, s['path'] as String,
+            SharedFolder(s['name'] as String, mapPath(s['path'] as String),
                 readOnly: s['readOnly'] == true)
     ];
   }
