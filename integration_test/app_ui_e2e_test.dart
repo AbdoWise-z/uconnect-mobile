@@ -7,8 +7,13 @@
 //
 //   E2E_SERVER      host:port of the rendezvous server (as seen from the device)
 //   E2E_TOPIC       the uconn:// invite link the host peer joined
-//   E2E_H264_SIZE   the picture size of the screen the host shares, WIDTHxHEIGHT
-//                   (empty: the host shares none, and watching is skipped)
+//   E2E_H264_SIZE   the picture size of the screen the host shares, WIDTHxHEIGHT;
+//                   "any" for a real screen of whatever size; empty when the
+//                   host shares none, and watching is skipped
+//   E2E_HOST_NAME   the host's device name (default "E2E Host")
+//   E2E_MIN_FPS     pictures per second the viewer must show (default 20; a
+//                   real screen with nothing moving on it sends fewer)
+//   E2E_WATCH_SECONDS  how long to keep watching (default 5)
 //   E2E_HOLD        seconds to rest on each screen (for screenshots; default 0)
 //   E2E_HOLD_SCREEN rest on this screen only (connect, devices, device, shares,
 //                   folder, downloaded, watching)
@@ -25,6 +30,9 @@ import 'package:uconnect_mobile/main.dart';
 const server = String.fromEnvironment('E2E_SERVER');
 const topic = String.fromEnvironment('E2E_TOPIC');
 const screenSize = String.fromEnvironment('E2E_H264_SIZE');
+const hostName = String.fromEnvironment('E2E_HOST_NAME', defaultValue: 'E2E Host');
+const minFps = int.fromEnvironment('E2E_MIN_FPS', defaultValue: 20);
+const watchSeconds = int.fromEnvironment('E2E_WATCH_SECONDS', defaultValue: 5);
 const hold = int.fromEnvironment('E2E_HOLD');
 const holdScreen = String.fromEnvironment('E2E_HOLD_SCREEN');
 
@@ -83,14 +91,16 @@ Future<AppState> openHost(WidgetTester tester) async {
   await tester.tap(find.widgetWithText(FilledButton, 'Connect'));
 
   // The workspace, with the host in its device list.
-  final host = find.text('E2E Host');
+  final host = find.text(hostName);
   await pumpUntil(tester, () => shown(host),
       timeout: const Duration(minutes: 2), reason: 'the host in the list');
   expect(state.startError, isEmpty);
   expect(state.connected, isTrue);
   await rest(tester, 'devices');
   await tester.tap(host);
-  await pumpUntil(tester, () => shown(find.text('Browse files')),
+  await pumpUntil(
+      tester,
+      () => shown(find.text('Browse files')) || shown(find.text('Watch screen')),
       reason: 'the device page');
   return state;
 }
@@ -157,26 +167,37 @@ void main() {
     // being shown: "640×360 · 30 fps · 0.4 Mbit/s · ...".
     await pumpUntil(tester, () => shown(find.byType(Texture)),
         timeout: const Duration(minutes: 1), reason: 'the video texture');
-    final live = RegExp('^${screenSize.replaceAll('x', '×')} · (\\d+) fps');
-    int shownFps() {
+    final live = RegExp(r'^(\d+)×(\d+) · (\d+) fps');
+    String liveLine() {
       for (final e in find.byType(Text).evaluate()) {
-        final m = live.firstMatch((e.widget as Text).data ?? '');
-        if (m != null) return int.parse(m.group(1)!);
+        final text = (e.widget as Text).data ?? '';
+        if (live.hasMatch(text)) return text;
       }
-      return -1;
+      return '';
     }
 
-    await pumpUntil(tester, () => shownFps() >= 20,
-        timeout: const Duration(minutes: 1),
-        reason: 'pictures of $screenSize shown at 20 fps or more');
-    // It keeps going: still at pace a few seconds later.
-    for (var i = 0; i < 25; i++) {
-      await tester.pump(const Duration(milliseconds: 200));
+    int shownFps() {
+      final m = live.firstMatch(liveLine());
+      return m == null ? -1 : int.parse(m.group(3)!);
     }
-    final fps = shownFps();
+
+    await pumpUntil(tester, () => shownFps() >= minFps,
+        timeout: const Duration(minutes: 1),
+        reason: 'pictures shown at $minFps fps or more');
+    // It keeps going: still at pace some seconds later.
+    final lines = <String>[];
+    for (var second = 0; second < watchSeconds; second++) {
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 200));
+      }
+      lines.add(liveLine());
+    }
+    final m = live.firstMatch(liveLine())!;
+    final size = '${m.group(1)}x${m.group(2)}';
     // ignore: avoid_print
-    print('E2E_WATCH size=$screenSize shownFps=$fps');
-    expect(fps, greaterThanOrEqualTo(20));
+    print('E2E_WATCH size=$size shownFps=${shownFps()} lines=$lines');
+    if (screenSize != 'any') expect(size, screenSize);
+    expect(shownFps(), greaterThanOrEqualTo(minFps));
     await rest(tester, 'watching');
   },
       skip: screenSize.isEmpty,
