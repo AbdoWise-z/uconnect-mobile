@@ -20,7 +20,7 @@ set(UCONNECT_BUILD_SERVER ${UCMOBILE_BUILD_SERVER} CACHE BOOL "" FORCE)
 FetchContent_Declare(
     uconnect
     GIT_REPOSITORY https://github.com/AbdoWise-z/uconnect.git
-    GIT_TAG 867b37181bcdc9e17507e1a6a2938bc7e2a3d2a2
+    GIT_TAG fd147a370998e7973d2720f227af4c462102ebe5
 )
 FetchContent_MakeAvailable(uconnect)
 
