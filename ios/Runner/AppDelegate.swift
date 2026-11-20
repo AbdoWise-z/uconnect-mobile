@@ -15,6 +15,9 @@ import UIKit
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "InviteLinks") {
       InviteLinks.register(with: registrar)
     }
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "ScreenDecoder") {
+      ScreenDecoder.register(with: registrar)
+    }
   }
 }
 

@@ -1,7 +1,8 @@
-// Dart side of the native H.264 decoder (ScreenDecoder.kt). Creates a Flutter
-// texture, feeds it the access units from a ScreenViewer, and reports the
-// decoded size. Android only for now; elsewhere `textureId` stays null and the
-// view shows the "not supported on this platform" state.
+// Dart side of the native H.264 decoder (ScreenDecoder.kt on Android,
+// ScreenDecoder.swift on iOS). Creates a Flutter texture, feeds it the access
+// units from a ScreenViewer, and reports the decoded size. Elsewhere
+// `textureId` stays null and the view shows the "not supported on this
+// platform" state.
 
 import 'dart:async';
 import 'dart:io';
@@ -24,7 +25,7 @@ class ScreenDecoder {
   int _starts = 0; // the latest start() call; an overtaken one does not subscribe
   bool _disposed = false;
 
-  bool get supported => Platform.isAndroid;
+  bool get supported => Platform.isAndroid || Platform.isIOS;
 
   ScreenDecoder() {
     _channel.setMethodCallHandler((call) async {

@@ -2,16 +2,21 @@
 # End-to-end on an iOS simulator, the counterpart of e2e-android.ps1:
 #   1. builds the host pieces for this Mac (libuconnect_c.dylib,
 #      uconnect-rendezvous) and the iOS framework, if they are missing
-#   2. starts a rendezvous server and a host peer serving a share
-#   3. runs integration_test/storage_e2e_test.dart (the core stack) and
-#      integration_test/app_ui_e2e_test.dart (the app's screens) on the
-#      simulator
+#   2. encodes a short H.264 test stream (scripts/h264-sample.swift)
+#   3. starts a rendezvous server and a host peer (tool/e2e_host.dart) that
+#      serves a share and "shares a screen" by playing that stream
+#   4. runs the integration tests on the simulator:
+#        storage_e2e_test   the core stack against the host
+#        decoder_e2e_test   the native video decoder, fed the stream directly
+#        app_ui_e2e_test    the app's screens: join, browse, download, watch
 #
 #   sh scripts/e2e-ios.sh [simulator name or UDID]
+#   E2E_HOLD=4 sh scripts/e2e-ios.sh     # rest on each screen, to watch
+#   E2E_HOLD=30 E2E_HOLD_SCREEN=watching sh scripts/e2e-ios.sh   # on one only
 #
 # The simulator shares the Mac's loopback interface, so it reaches the server
 # at 127.0.0.1 with no port forwarding. Needs a booted simulator (or the name
-# of one to boot), Xcode, Flutter, CMake and Ninja.
+# of one to boot), Xcode, Flutter, CMake, Ninja and python3.
 set -e
 root="$(cd "$(dirname "$0")/.." && pwd)"
 device="${1:-booted}"
@@ -35,11 +40,14 @@ else
   udid="$device"
 fi
 
-port=$((20000 + $$ % 20000))
+port=$((20000 + $$ % 10000))
+web=$((port + 1))
+size=640x360
 work="$(mktemp -d "${TMPDIR:-/tmp}/uc-e2e-XXXXXX")"
 share="$work/share"
-mkdir -p "$share"
+mkdir -p "$share" "$work/web"
 printf 'hello from the desk' > "$share/hello.txt"
+swift "$root/scripts/h264-sample.swift" "$work/web/sample.h264" 640 360 90 30
 
 cd "$root"
 export UCONNECT_C_LIBRARY="$lib"
@@ -50,36 +58,50 @@ case "$topic" in
   *) echo "could not make a topic: $topic" >&2; exit 1 ;;
 esac
 
-server=""; peer=""
+server=""; peer=""; http=""
 cleanup() {
-  [ -n "$peer" ] && kill "$peer" 2>/dev/null
-  [ -n "$server" ] && kill "$server" 2>/dev/null
+  code=$?
+  # Whatever is already gone must not turn a passing run into a failure.
+  set +e
+  trap - EXIT INT TERM
+  touch "$work/stop"   # the host peer leaves the topic and exits on its own
+  if [ -n "$peer" ]; then sleep 2; kill "$peer" 2>/dev/null; fi
+  if [ -n "$http" ]; then kill "$http" 2>/dev/null; fi
+  if [ -n "$server" ]; then kill "$server" 2>/dev/null; fi
   rm -rf "$work"
+  exit "$code"
 }
 trap cleanup EXIT INT TERM
 
 "$rvz" --port "$port" --quiet > "$work/server.log" 2>&1 &
 server=$!
-dart run bin/host_peer.dart "127.0.0.1:$port" "$topic" "$share" > "$work/peer.log" 2>&1 &
+(cd "$work/web" && exec python3 -m http.server "$web" --bind 127.0.0.1) > "$work/http.log" 2>&1 &
+http=$!
+flutter test tool/e2e_host.dart \
+  --dart-define="E2E_SERVER=127.0.0.1:$port" --dart-define="E2E_TOPIC=$topic" \
+  --dart-define="E2E_SHARE=$share" --dart-define="E2E_H264_FILE=$work/web/sample.h264" \
+  --dart-define="E2E_H264_SIZE=$size" \
+  --dart-define="E2E_READY_FILE=$work/ready" --dart-define="E2E_STOP_FILE=$work/stop" \
+  > "$work/peer.log" 2>&1 &
 peer=$!
-# The peer prints READY once it has published to the topic.
+# The host writes the ready file once it has published to the topic.
 i=0
-until grep -q '^READY ' "$work/peer.log" 2>/dev/null; do
+until [ -f "$work/ready" ]; do
   i=$((i + 1))
-  if [ "$i" -gt 60 ] || ! kill -0 "$peer" 2>/dev/null; then
-    echo "the host peer did not come up:" >&2; cat "$work/peer.log" >&2; exit 1
+  if [ "$i" -gt 120 ] || ! kill -0 "$peer" 2>/dev/null; then
+    echo "the host peer did not come up:" >&2; tail -40 "$work/peer.log" >&2; exit 1
   fi
   sleep 1
 done
 
-# The core stack first, then the same journey through the app's screens.
-# E2E_HOLD=<seconds> rests on each screen of the second, for screenshots.
 status=0
-for t in storage_e2e_test app_ui_e2e_test; do
+for t in storage_e2e_test decoder_e2e_test app_ui_e2e_test; do
   flutter test "integration_test/$t.dart" -d "$udid" \
     --dart-define="E2E_SERVER=127.0.0.1:$port" \
     --dart-define="E2E_TOPIC=$topic" \
-    --dart-define="E2E_HOLD=${E2E_HOLD:-0}" || status=$?
+    --dart-define="E2E_H264=http://127.0.0.1:$web/sample.h264" \
+    --dart-define="E2E_H264_SIZE=$size" \
+    --dart-define="E2E_HOLD=${E2E_HOLD:-0}"     --dart-define="E2E_HOLD_SCREEN=${E2E_HOLD_SCREEN:-}" || status=$?
 done
 if [ "$status" -ne 0 ]; then
   echo "--- host peer log" >&2; tail -40 "$work/peer.log" >&2
