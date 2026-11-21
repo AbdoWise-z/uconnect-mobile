@@ -20,6 +20,7 @@ import 'package:uconnect_mobile/app/app_state.dart';
 import 'package:uconnect_mobile/core/permissions.dart';
 import 'package:uconnect_mobile/main.dart';
 import 'package:uconnect_mobile/ui/display_view.dart';
+import 'package:uconnect_mobile/ui/settings_page.dart';
 
 const server = String.fromEnvironment('E2E_SERVER');
 const topic = String.fromEnvironment('E2E_TOPIC');
@@ -55,6 +56,57 @@ void main() {
         skip: 'E2E_SERVER / E2E_TOPIC not set');
     return;
   }
+
+  // The permission a computer needs can be handed out from the app's own
+  // screens. (It could not at first: the rows were left out as belonging to a
+  // feature the app did not have.)
+  testWidgets('the display permissions are offered in Settings', (tester) async {
+    final stamp = DateTime.now().millisecondsSinceEpoch;
+    final support = await getApplicationSupportDirectory();
+    final documents = await getApplicationDocumentsDirectory();
+    final data = Directory('${support.path}/display-perm-$stamp');
+    final files = Directory('${documents.path}/display-perm-$stamp');
+    await data.create(recursive: true);
+    await files.create(recursive: true);
+    final state = AppState(data.path, filesDir: files.path);
+    addTearDown(() async {
+      state.shutdown();
+      await data.delete(recursive: true);
+      await files.delete(recursive: true);
+    });
+    await state.init();
+    expect(state.initError, isEmpty);
+    await tester.pumpWidget(
+        MaterialApp(home: Scaffold(body: SettingsPage(state: state))));
+
+    // The overview is a long, lazily built list: the row exists only once
+    // it has been scrolled to.
+    await pumpUntil(tester, () => shown(find.text('Topic & connection')),
+        reason: 'the settings page');
+    final row = find.text('Default permissions');
+    await tester.scrollUntilVisible(row, 200,
+        scrollable: find.byType(Scrollable).first);
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(row.first);
+    await pumpUntil(tester, () => shown(find.text('Observe')),
+        reason: 'the default permissions page');
+    final use = find.text('Use as display');
+    await tester.scrollUntilVisible(use, 200,
+        scrollable: find.byType(Scrollable).last);
+    expect(use, findsOneWidget);
+    expect(state.store.defaultPermissions.contains(Perm.displayShow), isFalse);
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(use);
+    await pumpUntil(
+        tester, () => state.store.defaultPermissions.contains(Perm.displayShow),
+        timeout: const Duration(seconds: 10),
+        reason: 'the permission being granted by the tap');
+    // The settings file is being written: let that finish before the folder
+    // it is in goes away.
+    for (var i = 0; i < 5; i++) {
+      await tester.pump(const Duration(milliseconds: 200));
+    }
+  });
 
   testWidgets('the host uses this device as an extended display',
       (tester) async {

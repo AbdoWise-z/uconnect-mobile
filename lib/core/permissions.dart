@@ -41,9 +41,12 @@ class PermissionInfo {
   final bool sensitive;
 }
 
-/// What this app can serve today: storage fully; screen/control/camera
-/// hosting and being an extended display are not offered from a phone in this
-/// version, so their grants are listed but unavailable.
+/// Every permission the protocol defines, in the order the app shows them.
+/// The app serves all of them today (storage, screen, control, camera, being
+/// an extended display, sync). `available: false` is for a grant whose action
+/// does not exist in the app yet: the screens that hand out permissions leave
+/// such a row out, so nothing may stay marked that way once its feature
+/// ships (test/permissions_table_test.dart).
 const List<PermissionInfo> permissionTable = [
   PermissionInfo(
       id: Perm.storageObserve,
@@ -116,7 +119,7 @@ const List<PermissionInfo> permissionTable = [
       service: 'display',
       label: 'Use as display',
       description: 'Ask to use this device\'s screen as an extra monitor.',
-      available: false,
+      available: true,
       sensitive: true),
   PermissionInfo(
       id: Perm.displayDirect,
@@ -124,7 +127,7 @@ const List<PermissionInfo> permissionTable = [
       label: 'Without asking',
       description:
           'Use this device\'s screen as a monitor without a consent prompt.',
-      available: false,
+      available: true,
       sensitive: true),
   PermissionInfo(
       id: Perm.syncOffer,
