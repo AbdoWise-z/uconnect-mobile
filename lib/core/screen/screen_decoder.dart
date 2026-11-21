@@ -22,6 +22,10 @@ class ScreenDecoder {
   Stream<String> get errors => _errors.stream;
 
   StreamSubscription<VideoAccessUnit>? _sub;
+  ScreenViewer? _viewer;
+
+  /// How often the native decoder asked to start over from a keyframe.
+  int keyframesAsked = 0;
   int _starts = 0; // the latest start() call; an overtaken one does not subscribe
   bool _disposed = false;
 
@@ -37,6 +41,11 @@ class ScreenDecoder {
           if (!_sizeChanged.isClosed) _sizeChanged.add(size);
         case 'error':
           if (!_errors.isClosed) _errors.add(call.arguments as String? ?? '');
+        case 'needKeyframe':
+          // The decoder lost its place (iOS: every return from the
+          // background ends its session). Ask the host for a keyframe now.
+          keyframesAsked++;
+          _viewer?.restartFromKeyframe();
       }
       return null;
     });
@@ -58,6 +67,7 @@ class ScreenDecoder {
         .invokeMapMethod<String, Object?>('create', {'bufferMs': bufferMs});
     if (start != _starts || _disposed) return null;
     textureId = created?['textureId'] as int?;
+    _viewer = viewer;
     _sub = viewer.units.listen((u) async {
       if (_disposed) return;
       final started = DateTime.now();

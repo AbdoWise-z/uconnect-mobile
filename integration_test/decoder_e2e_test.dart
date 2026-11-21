@@ -144,4 +144,68 @@ void main() {
       }
     }, timeout: const Timeout(Duration(minutes: 3)));
   }
+
+  // iOS: a decoder that has lost its place says so, once, so that the viewer
+  // can ask the host for a keyframe instead of showing a frozen picture until
+  // the host's next one. (Returning from the background ends the session in
+  // the same way; a test cannot send the app there.)
+  testWidgets('a unit that cannot be decoded asks for a keyframe', (tester) async {
+    final units = parseUnits(await fetch(streamUrl));
+    const channel = MethodChannel('uconnect/screen');
+    var asked = 0;
+    channel.setMethodCallHandler((call) async {
+      if (call.method == 'needKeyframe') asked++;
+      return null;
+    });
+    addTearDown(() async {
+      await channel.invokeMethod<void>('dispose');
+      channel.setMethodCallHandler(null);
+    });
+    await channel.invokeMapMethod<String, Object?>('create', {'bufferMs': 0});
+
+    Future<void> feed(Uint8List bytes, bool keyframe) async {
+      await channel.invokeMethod<void>('decode', {
+        'bytes': bytes,
+        'keyframe': keyframe,
+        'ptsUs': DateTime.now().microsecondsSinceEpoch,
+      });
+      await tester.pump(const Duration(milliseconds: 1000 ~/ fps));
+    }
+
+    for (final u in units.take(10)) {
+      await feed(u.bytes, u.keyframe);
+    }
+    expect(asked, 0, reason: 'a clean stream asks for nothing');
+
+    // A slice of noise where a picture should be, then the stream goes on.
+    final noise = Uint8List.fromList([
+      0, 0, 0, 1, 0x41, // a non-keyframe slice
+      for (var i = 0; i < 400; i++) (i * 37 + 11) & 0xFF,
+    ]);
+    await feed(noise, false);
+    for (final u in units.skip(10).take(8)) {
+      if (u.keyframe) break;
+      await feed(u.bytes, u.keyframe);
+    }
+    for (var i = 0; i < 10 && asked == 0; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(asked, 1, reason: 'asked once, however many units followed');
+
+    // The keyframe arrives; decoding goes on and nothing more is asked.
+    // (Reading the counters starts them again from zero.)
+    await channel.invokeMapMethod<String, Object?>('stats');
+    for (final u in units.take(10)) {
+      await feed(u.bytes, u.keyframe);
+    }
+    for (var i = 0; i < 5; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    final after =
+        (await channel.invokeMapMethod<String, Object?>('stats'))?['rendered'] as int? ?? 0;
+    // ignore: avoid_print
+    print('E2E_DECODER keyframe asked=$asked rendered after=$after');
+    expect(asked, 1);
+    expect(after, 10);
+  }, skip: !Platform.isIOS, timeout: const Timeout(Duration(minutes: 2)));
 }

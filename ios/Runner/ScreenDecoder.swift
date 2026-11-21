@@ -22,6 +22,10 @@ import VideoToolbox
 /// transit of the last few seconds, slewed by at most a tenth; without one, as
 /// soon as it is decoded.
 ///
+/// To Dart: size(width, height) when the picture size is known or changes,
+/// and needKeyframe() when the decoder lost its place and can show nothing
+/// until a keyframe comes.
+///
 /// The stream carries SPS/PPS inside each keyframe, so the session is made
 /// from the first keyframe, and made again when they change (the sharing
 /// device rotated, or changed its resolution).
@@ -48,6 +52,8 @@ final class ScreenDecoder: NSObject, FlutterPlugin {
   private var sps = Data()
   private var pps = Data()
   private var sawKeyframe = false
+  /// Dart has been told a keyframe is needed, and none has come since.
+  private var askedForKeyframe = false
   private var reportedWidth = 0
   private var reportedHeight = 0
 
@@ -163,6 +169,19 @@ final class ScreenDecoder: NSObject, FlutterPlugin {
     sawKeyframe = false
   }
 
+  /// Nothing can be shown until the next keyframe: the session is dropped and
+  /// Dart is told, once, so the viewer asks the host for one now instead of
+  /// waiting out the host's keyframe interval with a frozen picture. That is
+  /// the case after every return from the background, where iOS invalidates
+  /// the session.
+  private func needKeyframe() {
+    dropSession()
+    if !askedForKeyframe {
+      askedForKeyframe = true
+      tell("needKeyframe", nil)
+    }
+  }
+
   private func feed(_ unit: Data, keyframe: Bool, ptsUs: Int64) {
     guard texture != nil else { return }
     let nals = ScreenDecoder.nalUnits(unit)
@@ -182,7 +201,10 @@ final class ScreenDecoder: NSObject, FlutterPlugin {
       }
     }
     guard let session = session, let format = format else { return }  // waits for a keyframe
-    if keyframe { sawKeyframe = true }
+    if keyframe {
+      sawKeyframe = true
+      askedForKeyframe = false
+    }
     if !sawKeyframe { return }
 
     let now = ScreenDecoder.now()
@@ -240,13 +262,19 @@ final class ScreenDecoder: NSObject, FlutterPlugin {
       session, sampleBuffer: sampleBuffer,
       flags: [._EnableAsynchronousDecompression, ._1xRealTimePlayback], infoFlagsOut: nil
     ) { [weak self] status, _, image, _, _ in
-      guard let self = self, status == noErr, let image = image else { return }
+      guard let self = self else { return }
+      guard status == noErr else {
+        // Not decodable, found out late: what follows builds on it.
+        self.work.async { if made == self.generation { self.needKeyframe() } }
+        return
+      }
+      guard let image = image else { return }  // dropped by the decoder itself
       self.work.async { self.decoded(image, ptsUs: ptsUs, generation: made) }
     }
     if status != noErr {
       // The session is gone (the app was in the background) or the unit was
       // not decodable: start over at the next keyframe.
-      dropSession()
+      needKeyframe()
     }
   }
 
