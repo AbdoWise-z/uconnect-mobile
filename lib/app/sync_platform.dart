@@ -1,13 +1,18 @@
 // What folder sync asks the platform for beyond files (SyncPlatform.kt on
-// Android): whether the phone is on an unmetered network and charging, with
-// changes as they happen; plain notifications for sync problems; and the
-// free space of the disk a folder is on. Off Android everything is "yes" and
-// "unknown", so sync is never held back where nothing can tell.
+// Android, SyncPlatform.swift on iOS): whether the phone is on an unmetered
+// network and charging, with changes as they happen; plain notifications for
+// sync problems; and the free space of the disk a folder is on. Elsewhere
+// everything is "yes" and "unknown", so sync is never held back where nothing
+// can tell.
+
 
 import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
+
+/// Where the platform side of these channels exists.
+bool get _native => Platform.isAndroid || Platform.isIOS;
 
 /// The conditions "sync only on Wi-Fi" and "only while charging" look at.
 class PowerConditions {
@@ -23,7 +28,7 @@ class PowerConditions {
   bool known = false;
 
   Future<void> start() async {
-    if (!Platform.isAndroid) return;
+    if (!_native) return;
     try {
       _apply(await _channel.invokeMethod<Map>('state'));
     } on PlatformException {
@@ -60,7 +65,7 @@ class SyncNotifier {
   int _nextId = 2000;
 
   Future<void> show(String key, String title, String text) async {
-    if (!Platform.isAndroid || !_shown.add(key)) return;
+    if (!_native || !_shown.add(key)) return;
     try {
       await _channel.invokeMethod<void>('show', {
         'id': _nextId++,
@@ -79,7 +84,7 @@ class SyncNotifier {
 
 /// Bytes free on the disk holding `path`; -1 when unknown.
 Future<int> freeSpaceOf(String path) async {
-  if (!Platform.isAndroid) return -1;
+  if (!_native) return -1;
   try {
     return await const MethodChannel('uconnect/storage')
             .invokeMethod<int>('freeSpace', {'path': path}) ??

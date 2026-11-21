@@ -18,6 +18,9 @@ import UIKit
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "ScreenDecoder") {
       ScreenDecoder.register(with: registrar)
     }
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "SyncPlatform") {
+      SyncPlatform.register(with: registrar)
+    }
   }
 }
 

@@ -6,9 +6,11 @@
 #   3. starts a rendezvous server and a host peer (tool/e2e_host.dart) that
 #      serves a share and "shares a screen" by playing that stream
 #   4. runs the integration tests on the simulator:
-#        storage_e2e_test   the core stack against the host
+#        storage_e2e_test   the core stack against the host, both ways
+#        platform_e2e_test  power, free space and notification channels
 #        decoder_e2e_test   the native video decoder, fed the stream directly
 #        app_ui_e2e_test    the app's screens: join, browse, download, watch
+#                           the host's screen and its camera
 #
 #   sh scripts/e2e-ios.sh [simulator name or UDID]
 #   E2E_HOLD=4 sh scripts/e2e-ios.sh     # rest on each screen, to watch
@@ -95,13 +97,15 @@ until [ -f "$work/ready" ]; do
 done
 
 status=0
-for t in storage_e2e_test decoder_e2e_test app_ui_e2e_test; do
+for t in storage_e2e_test platform_e2e_test decoder_e2e_test app_ui_e2e_test; do
   flutter test "integration_test/$t.dart" -d "$udid" \
     --dart-define="E2E_SERVER=127.0.0.1:$port" \
     --dart-define="E2E_TOPIC=$topic" \
     --dart-define="E2E_H264=http://127.0.0.1:$web/sample.h264" \
     --dart-define="E2E_H264_SIZE=$size" \
-    --dart-define="E2E_HOLD=${E2E_HOLD:-0}"     --dart-define="E2E_HOLD_SCREEN=${E2E_HOLD_SCREEN:-}" || status=$?
+    --dart-define=E2E_HOST_READS=true --dart-define=E2E_HOST_CAMERA=true \
+    --dart-define="E2E_HOLD=${E2E_HOLD:-0}" \
+    --dart-define="E2E_HOLD_SCREEN=${E2E_HOLD_SCREEN:-}" || status=$?
 done
 if [ "$status" -ne 0 ]; then
   echo "--- host peer log" >&2; tail -40 "$work/peer.log" >&2

@@ -25,6 +25,8 @@ import 'package:uconnect_mobile/uconnect/uconnect.dart';
 
 const server = String.fromEnvironment('E2E_SERVER');
 const topic = String.fromEnvironment('E2E_TOPIC');
+// Set when the host is tool/e2e_host.dart, which reads the phone's share back.
+const hostReads = bool.fromEnvironment('E2E_HOST_READS');
 
 Future<void> waitFor(bool Function() condition,
     {Duration timeout = const Duration(seconds: 60), String? reason}) async {
@@ -129,6 +131,38 @@ void main() {
         reason: 'upload settles');
     expect(t.state, TransferState.done, reason: t.error);
   }, timeout: const Timeout(Duration(minutes: 3)));
+
+  // The other direction: the phone offers a share, and the host
+  // (tool/e2e_host.dart) reads a file out of it into its own share, where
+  // the phone finds it again. bin/host_peer.dart does not do this.
+  testWidgets('the host reads what the phone shares', (tester) async {
+    final dev = hostDev()!;
+    final words =
+        'hello from the phone ${DateTime.now().millisecondsSinceEpoch}';
+    await File('${dataDir.path}/e2e-share/from-phone.txt').writeAsString(words);
+    final local = File('${dataDir.path}/e2e-fetched-back.txt');
+    final deadline = DateTime.now().add(const Duration(seconds: 90));
+    var got = '';
+    // The host notices the file, fetches it, and it appears in its share;
+    // it may still be arriving there when first seen, so read until whole.
+    while (got != words) {
+      if (DateTime.now().isAfter(deadline)) {
+        fail('the host did not hand the file back; last read: "$got"');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      final docs = await client.list(dev, '/Docs');
+      if (!docs.entries.any((e) => e.name == 'fetched-from-phone.txt')) {
+        continue;
+      }
+      if (local.existsSync()) local.deleteSync();
+      final t = client.download(dev, '/Docs/fetched-from-phone.txt', local.path);
+      await waitFor(
+          () =>
+              t.state == TransferState.done || t.state == TransferState.failed,
+          reason: 'download settles');
+      if (t.state == TransferState.done) got = await local.readAsString();
+    }
+  }, skip: !hostReads, timeout: const Timeout(Duration(minutes: 3)));
 
   testWidgets('file operations round-trip from the phone', (tester) async {
     final dev = hostDev()!;

@@ -11,12 +11,14 @@
 //                   "any" for a real screen of whatever size; empty when the
 //                   host shares none, and watching is skipped
 //   E2E_HOST_NAME   the host's device name (default "E2E Host")
+//   E2E_HOST_CAMERA true when the host also offers a camera (tool/e2e_host.dart
+//                   does), to watch that as well
 //   E2E_MIN_FPS     pictures per second the viewer must show (default 20; a
 //                   real screen with nothing moving on it sends fewer)
 //   E2E_WATCH_SECONDS  how long to keep watching (default 5)
 //   E2E_HOLD        seconds to rest on each screen (for screenshots; default 0)
 //   E2E_HOLD_SCREEN rest on this screen only (connect, devices, device, shares,
-//                   folder, downloaded, watching)
+//                   folder, downloaded, watching, camera)
 
 import 'dart:io';
 
@@ -31,6 +33,7 @@ const server = String.fromEnvironment('E2E_SERVER');
 const topic = String.fromEnvironment('E2E_TOPIC');
 const screenSize = String.fromEnvironment('E2E_H264_SIZE');
 const hostName = String.fromEnvironment('E2E_HOST_NAME', defaultValue: 'E2E Host');
+const hostCamera = bool.fromEnvironment('E2E_HOST_CAMERA');
 const minFps = int.fromEnvironment('E2E_MIN_FPS', defaultValue: 20);
 const watchSeconds = int.fromEnvironment('E2E_WATCH_SECONDS', defaultValue: 5);
 const hold = int.fromEnvironment('E2E_HOLD');
@@ -154,14 +157,16 @@ void main() {
     await rest(tester, 'downloaded');
   }, timeout: const Timeout(Duration(minutes: 8)));
 
-  testWidgets('watch the host\'s screen', (tester) async {
+  // Opens the host's screen or camera from its device page and reads the
+  // viewer's live line until pictures are being shown at pace.
+  Future<void> watch(WidgetTester tester,
+      {required String tile, required String granted, required String label}) async {
     await openHost(tester);
 
-    final granted = find.text('See a live view of its screen');
-    await pumpUntil(tester, () => shown(granted),
+    await pumpUntil(tester, () => shown(find.text(granted)),
         timeout: const Duration(minutes: 2),
-        reason: 'the host connected and granting its screen');
-    await tester.tap(find.text('Watch screen'));
+        reason: 'the host connected and granting its $label');
+    await tester.tap(find.text(tile));
 
     // The picture: a texture, then the live line under it saying what is
     // being shown: "640×360 · 30 fps · 0.4 Mbit/s · ...".
@@ -195,11 +200,28 @@ void main() {
     final m = live.firstMatch(liveLine())!;
     final size = '${m.group(1)}x${m.group(2)}';
     // ignore: avoid_print
-    print('E2E_WATCH size=$size shownFps=${shownFps()} lines=$lines');
+    print('E2E_WATCH $label size=$size shownFps=${shownFps()} lines=$lines');
     if (screenSize != 'any') expect(size, screenSize);
     expect(shownFps(), greaterThanOrEqualTo(minFps));
-    await rest(tester, 'watching');
+    await rest(tester, label == 'screen' ? 'watching' : 'camera');
+  }
+
+  testWidgets('watch the host\'s screen', (tester) async {
+    await watch(tester,
+        tile: 'Watch screen',
+        granted: 'See a live view of its screen',
+        label: 'screen');
   },
       skip: screenSize.isEmpty,
+      timeout: const Timeout(Duration(minutes: 8)));
+
+  // The same viewer and decoder on the camera channel (cam.*, video kind 3).
+  testWidgets('watch the host\'s camera', (tester) async {
+    await watch(tester,
+        tile: 'Watch camera',
+        granted: 'See a live feed from its camera',
+        label: 'camera');
+  },
+      skip: screenSize.isEmpty || !hostCamera,
       timeout: const Timeout(Duration(minutes: 8)));
 }

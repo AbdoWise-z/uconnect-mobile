@@ -1,9 +1,14 @@
 // A headless uConnect peer for the on-device E2E tests that also shares a
-// "screen": like bin/host_peer.dart it joins a topic and serves a storage
-// share with everything granted, and on top of that it offers screen sharing,
-// playing a recorded H.264 stream (scripts/h264-sample.swift) in a loop as if
-// it were the live capture. A device can then watch a screen with no real
-// screen, capture permission or window involved.
+// "screen" and a "camera": like bin/host_peer.dart it joins a topic and serves
+// a storage share with everything granted, and on top of that it offers screen
+// and camera sharing, playing a recorded H.264 stream
+// (scripts/h264-sample.swift) in a loop as if it were the live capture. A
+// device can then watch either with no real screen, camera, capture permission
+// or window involved.
+//
+// It also reads what a device shares: from every peer that offers a share
+// named "Phone" holding from-phone.txt, it downloads that file into its own
+// share as fetched-from-phone.txt, where the device's test finds it again.
 //
 // The screen host needs dart:ui (for Size), which the plain Dart VM lacks, so
 // this runs under the Flutter test runner rather than `dart run`:
@@ -49,10 +54,17 @@ const fps = 30;
 /// keyframe, so the loop restarts cleanly, and a keyframe request skips ahead
 /// to the next one.
 class RecordedSource extends VideoSource {
-  RecordedSource(this.units, this.size);
+  RecordedSource(this.units, this.size, {this.names = const []});
 
   final List<CaptureUnit> units;
   final Size size;
+
+  /// What it reports as its sources: empty for a screen, the cameras' names
+  /// for a camera.
+  final List<String> names;
+
+  @override
+  Future<List<String>> sources() async => names;
   final _out = StreamController<CaptureUnit>.broadcast();
   Timer? _timer;
   int _at = 0;
@@ -124,6 +136,33 @@ List<CaptureUnit> readUnits(Uint8List data) {
   return units;
 }
 
+/// Reads from-phone.txt out of the "Phone" share of each connected peer that
+/// offers one and lets this host read it, into this host's own share.
+Future<void> fetchFromPhones(
+    Session session, StorageClient client, Set<String> done) async {
+  for (final p in session.peers.values.toList()) {
+    if (p.stateCode != 3 || !p.hasHello || done.contains(p.devId)) continue;
+    if (!p.services.contains(Services.storage) ||
+        !p.grantedToMe.contains(Perm.storageRead)) {
+      continue;
+    }
+    try {
+      final root = await client.list(p.devId, '/');
+      if (!root.entries.any((e) => e.name == 'Phone')) continue;
+      final phone = await client.list(p.devId, '/Phone');
+      if (!phone.entries.any((e) => e.name == 'from-phone.txt')) continue;
+      done.add(p.devId);
+      final local = '$shareDir/fetched-from-phone.txt';
+      for (final old in [File(local), File('$local.ucpart')]) {
+        if (old.existsSync()) old.deleteSync();
+      }
+      client.download(p.devId, '/Phone/from-phone.txt', local);
+    } on Object catch (e) {
+      stderr.writeln('reading ${p.displayName}: $e');
+    }
+  }
+}
+
 void main() {
   if (server.isEmpty || topic.isEmpty) {
     test('E2E host (skipped: run through scripts/e2e-ios.sh)', () {},
@@ -139,12 +178,14 @@ void main() {
     session.logLines.listen(stderr.writeln);
 
     final services = <String>[];
+    StorageClient? client;
+    final fetched = <String>{}; // peers whose share has been read
     if (shareDir.isNotEmpty) {
       await Directory(shareDir).create(recursive: true);
       StorageOfferer(session)
         ..offered = true
         ..shares = [SharedFolder('Docs', shareDir)];
-      StorageClient(session);
+      client = StorageClient(session);
       services.add(Services.storage);
     }
     if (streamFile.isNotEmpty) {
@@ -153,11 +194,26 @@ void main() {
         fail('$streamFile is not a stream from scripts/h264-sample.swift');
       }
       final wh = streamSize.split('x').map(double.parse).toList();
-      ScreenHost(session, RecordedSource(units, Size(wh[0], wh[1])),
-          RemoteInput(),
-          askConsent: (dev, name, {bool control = false, bool camera = false}) async => true)
-        .offered = true;
+      final size = Size(wh[0], wh[1]);
+      Future<bool> allow(String dev, String name,
+              {bool control = false, bool camera = false}) async =>
+          true;
+      ScreenHost(session, RecordedSource(units, size), RemoteInput(),
+              askConsent: allow)
+          .offered = true;
       services.add(Services.screen);
+      // The camera is the same host under its own prefix and video kind, as in
+      // the app (AppState.cameraHost).
+      ScreenHost(session,
+              RecordedSource(units, size, names: const ['Test camera']),
+              RemoteInput(),
+              askConsent: allow,
+              prefix: 'cam',
+              videoKind: 3,
+              viewPerm: Perm.cameraView,
+              directPerm: Perm.cameraDirect)
+          .offered = true;
+      services.add(Services.camera);
     }
     session.setLocalHello(
         Hello(name: 'E2E Host', os: 'macos', services: services));
@@ -168,6 +224,8 @@ void main() {
       Perm.storageWrite,
       Perm.screenView,
       Perm.screenDirect,
+      Perm.cameraView,
+      Perm.cameraDirect,
     }));
 
     await session.start(
@@ -183,6 +241,7 @@ void main() {
         }
       }
       if (stopFile.isNotEmpty && File(stopFile).existsSync()) break;
+      if (client != null) await fetchFromPhones(session, client, fetched);
       await Future<void>.delayed(const Duration(milliseconds: 500));
     }
     await session.dispose();
