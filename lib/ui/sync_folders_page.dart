@@ -11,6 +11,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../app/app_state.dart';
+import '../app/folder_access.dart';
 import '../app/storage_access.dart';
 import '../core/identity.dart';
 import '../core/permissions.dart';
@@ -73,11 +74,20 @@ Future<String?> _chooseLocation(BuildContext context, AppState state, String lab
               style: TextStyle(color: UcColors.textSecondary, fontSize: 12),
             ),
           ],
+          if (FolderAccess.supported) ...[
+            const SizedBox(height: 14),
+            Text(
+              'Or pick any folder the Files app shows: on this device, in '
+              'iCloud Drive, or in another app. uConnect keeps access to that '
+              'one folder only.',
+              style: TextStyle(color: UcColors.textSecondary, fontSize: 12),
+            ),
+          ],
         ],
       ),
       actions: [
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        if (Platform.isAndroid)
+        if (Platform.isAndroid || FolderAccess.supported)
           TextButton(
               onPressed: () => Navigator.pop(context, 'pick'), child: const Text('Pick a folder')),
         FilledButton(
@@ -88,6 +98,8 @@ Future<String?> _chooseLocation(BuildContext context, AppState state, String lab
   );
   if (choice == 'default') return suggested;
   if (choice != 'pick') return null;
+  // iOS: its own picker, which also keeps the access for later runs.
+  if (FolderAccess.supported) return FolderAccess.pick();
   if (!await StorageAccess.hasAllFilesAccess()) {
     await StorageAccess.requestAllFilesAccess();
     if (!context.mounted) return null;

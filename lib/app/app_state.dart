@@ -31,6 +31,7 @@ import '../core/screen/display_sink.dart';
 import '../ui/display_view.dart';
 import 'background.dart';
 import 'container_paths.dart';
+import 'folder_access.dart';
 import 'invite_links.dart';
 import 'store.dart';
 import 'sync_platform.dart';
@@ -88,10 +89,15 @@ class AppState extends ChangeNotifier {
 
   Future<void> init() async {
     if (Platform.isIOS) {
+      // Folders picked outside the app are reopened first: nothing can read
+      // them until then.
+      final picked = await FolderAccess.restore();
       final container = iosContainerOf(filesDir);
-      if (container != null) {
-        store.mapPath = (p) => rebaseIosContainerPath(p, container);
-      }
+      store.mapPath = savedPathMapper(
+          picked,
+          container == null
+              ? (p) => p
+              : (p) => rebaseIosContainerPath(p, container));
     }
     await store.load();
     screenHost =
@@ -891,7 +897,13 @@ class AppState extends ChangeNotifier {
 
   /// Stops syncing a folder; its files stay where they are.
   Future<void> leaveSyncFolder(String id) async {
+    final left = syncFolder(id);
     await _saveSyncFolders([for (final f in store.syncFolders) if (f.id != id) f]);
+    // A folder picked outside the app (iOS) is given back, unless another
+    // synced folder still lives at the same place.
+    if (left != null && !store.syncFolders.any((f) => f.path == left.path)) {
+      await FolderAccess.release(left.path);
+    }
     final state = File('$dataDir${Platform.pathSeparator}sync${Platform.pathSeparator}$id.json');
     if (await state.exists()) await state.delete();
   }
