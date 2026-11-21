@@ -9,6 +9,8 @@
 #        storage_e2e_test   the core stack against the host, both ways
 #        sync_e2e_test      folder sync with the host, both ways
 #        platform_e2e_test  power, free space and notification channels
+#        folders_e2e_test   folders outside the app: bookmarks, the Files picker
+#        share_sheet_e2e_test  the share sheet opens (an iPad needs an anchor)
 #        decoder_e2e_test   the native video decoder, fed the stream directly
 #        camera_host_e2e_test  this device's camera, watched by the host
 #        display_e2e_test   this device as the host's extended display
@@ -30,11 +32,14 @@ device="${1:-booted}"
 host="$root/native/build-host"
 lib="$host/_deps/uconnect-build/src/capi/libuconnect_c.dylib"
 rvz="$host/_deps/uconnect-build/server/uconnect-rendezvous"
-if [ ! -f "$lib" ] || [ ! -x "$rvz" ]; then
-  cmake -S "$root/native" -B "$host" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-    -DUCMOBILE_BUILD_SERVER=ON
-  cmake --build "$host" --target uconnect_c uconnect-rendezvous
-fi
+mkdir -p "$host"
+# Every time, not only when missing: it costs a second when nothing changed,
+# and after the pinned uconnect revision moves the host would otherwise go on
+# testing the app against the old library.
+cmake -S "$root/native" -B "$host" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DUCMOBILE_BUILD_SERVER=ON > "$host/build.log" 2>&1 \
+  && cmake --build "$host" --target uconnect_c uconnect-rendezvous >> "$host/build.log" 2>&1 \
+  || { echo "the host build failed:"; tail -20 "$host/build.log"; exit 1; }
 [ -d "$root/native/build-ios/uconnect_c.xcframework" ] || sh "$root/scripts/build-ios.sh"
 
 if [ "$device" = booted ]; then
@@ -103,7 +108,7 @@ until [ -f "$work/ready" ]; do
 done
 
 status=0
-for t in ${E2E_TESTS:-storage_e2e_test sync_e2e_test platform_e2e_test decoder_e2e_test camera_host_e2e_test display_e2e_test app_ui_e2e_test}; do
+for t in ${E2E_TESTS:-storage_e2e_test sync_e2e_test platform_e2e_test folders_e2e_test decoder_e2e_test camera_host_e2e_test display_e2e_test app_ui_e2e_test share_sheet_e2e_test}; do
   # shellcheck disable=SC2086  # E2E_FLUTTER_ARGS is a list of arguments
   flutter test "integration_test/$t.dart" -d "$udid" ${E2E_FLUTTER_ARGS:-} \
     --dart-define="E2E_SERVER=127.0.0.1:$port" \

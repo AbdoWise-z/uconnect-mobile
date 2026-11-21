@@ -179,9 +179,9 @@ E2E_HOLD=4 sh scripts/e2e-ios.sh   # rest on each screen, to watch or photograph
 |                                   | Android 9+ | iOS |
 |-----------------------------------|:----------:|:---:|
 | Browse / download / upload        | ✓ | ✓ (simulator only) |
-| Share folders from the phone      | ✓ | ✓ (untested) |
-| Folder sync                       | ✓ | untested |
-| Watch a screen or camera          | ✓ | ✓ (simulator only; camera untested) |
+| Share folders from the phone      | ✓ | ✓ (simulator only) |
+| Folder sync                       | ✓ | ✓ (simulator only), into the app's folder or one picked in Files |
+| Watch a screen or camera          | ✓ | ✓ (simulator only) |
 | Share the phone's screen / camera | ✓ | camera: ✓ (simulator only); screen: — |
 | Be controlled                     | ✓ (accessibility service) | — |
 | Be a computer's extended display  | ✓ | ✓ (simulator only) |
@@ -193,11 +193,25 @@ a phone). There it joins a topic, meets a desktop, browses, downloads and
 uploads, and watches a shared screen (H.264 through VideoToolbox into a
 Flutter texture, `ios/Runner/ScreenDecoder.swift`): `scripts/e2e-ios.sh` checks
 that. Downloads, the default shared folder
-and synced folders are in the app's Documents, which the Files app shows.
+and synced folders are in the app's Documents, which the Files app shows. A
+synced folder can also go in any folder the Files app offers (iCloud Drive,
+"On My iPhone", another app's): the app keeps a security-scoped bookmark for
+it and reopens it at each launch (`lib/app/folder_access.dart`). The picker
+itself and a folder outside the app's sandbox have only been tried as far as a
+simulator allows: it opens, and bookmarks round-trip.
 Sharing the phone's own folders and folder sync use the same code as on
-Android but have not been tried on iOS. The uconnect library is a dynamic framework
+Android and pass the same tests in the simulator.
+
+The app's bundle identifier is `dev.uconnect.mobile`, the same as the Android
+application id. The project names no signing team, which a simulator build
+does not need. For a real device, copy `ios/Flutter/Signing.xcconfig.example`
+to `Signing.xcconfig` (git ignores it) and put your team's ID in it.
+
+The uconnect library is a dynamic framework
 the app embeds. Build it once on the Mac, and again whenever the revision
-pinned in `native/CMakeLists.txt` changes, before the first build of the app:
+pinned in `native/CMakeLists.txt` changes, before the first build of the app.
+The script ends by checking that every C function the Dart bindings look up
+by name is exported by every slice of the framework:
 
 ```sh
 sh scripts/build-ios.sh      # needs Xcode, CMake and Ninja
