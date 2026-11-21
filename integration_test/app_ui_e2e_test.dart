@@ -103,7 +103,10 @@ Future<AppState> openHost(WidgetTester tester) async {
   await tester.tap(host);
   await pumpUntil(
       tester,
-      () => shown(find.text('Browse files')) || shown(find.text('Watch screen')),
+      () =>
+          shown(find.text('Browse files')) ||
+          shown(find.text('Watch screen')) ||
+          shown(find.text('Watch camera')),
       reason: 'the device page');
   return state;
 }

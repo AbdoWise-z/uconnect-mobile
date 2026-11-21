@@ -182,7 +182,7 @@ E2E_HOLD=4 sh scripts/e2e-ios.sh   # rest on each screen, to watch or photograph
 | Share folders from the phone      | ✓ | ✓ (untested) |
 | Folder sync                       | ✓ | untested |
 | Watch a screen or camera          | ✓ | ✓ (simulator only; camera untested) |
-| Share the phone's screen / camera | ✓ | — |
+| Share the phone's screen / camera | ✓ | camera: ✓ (simulator only); screen: — |
 | Be controlled                     | ✓ (accessibility service) | — |
 | Invite links and QR codes         | ✓ | ✓ (untested) |
 
@@ -204,9 +204,11 @@ flutter build ios --simulator --debug
 ```
 
 Without it Xcode stops with "There is no XCFramework found at
-.../native/build-ios/uconnect_c.xcframework". Invite links and the video decoder have native
-iOS code; the other platform channels (background service, notifications,
-screen and camera sharing, being controlled) are Android-only.
+.../native/build-ios/uconnect_c.xcframework". Invite links, the video decoder, camera sharing
+(`ios/Runner/CameraCapturer.swift`; tested with the simulator's simulated
+camera, never with a real one) and folder sync's power, free-space and
+notification channels have native iOS code. Screen sharing, the background
+service and being controlled are Android-only.
 
 ## Known issues and next up
 

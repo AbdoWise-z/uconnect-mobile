@@ -10,6 +10,12 @@
 // every proven peer, holding from-host.txt, and serves the same folder as the
 // share "Synced" so a device can see what arrived in it.
 //
+// With E2E_WATCH_CAMERAS=true it also watches the camera of each peer that
+// offers one and lets this host view it: for a few seconds, counting the
+// access units that arrive, then writes what it saw to camera-seen.txt in its
+// share. It has no decoder; that the stream arrives whole and starts with a
+// keyframe carrying parameter sets is what it can tell.
+//
 // It also reads what a device shares: from every peer that offers a share
 // named "Phone" holding from-phone.txt, it downloads that file into its own
 // share as fetched-from-phone.txt, where the device's test finds it again.
@@ -38,6 +44,7 @@
 //   E2E_H264=<url>    the stream fetched over HTTP instead of read from a file
 //   E2E_RELAY=0       let peers connect directly when they can (the default,
 //                     1, forces the relay: deterministic on one machine)
+//   E2E_CAPTURE=camera   share the device's camera through its real encoder
 //   E2E_CAPTURE=screen   share the device's real screen with its real encoder
 //                     instead of the recording (Android: the system's consent
 //                     dialog comes up on the device when a viewer asks). The
@@ -53,9 +60,11 @@ import 'dart:ui' show Size;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:uconnect_mobile/core/identity.dart';
 import 'package:uconnect_mobile/core/permissions.dart';
+import 'package:uconnect_mobile/core/screen/camera_capture.dart';
 import 'package:uconnect_mobile/core/screen/remote_input.dart';
 import 'package:uconnect_mobile/core/screen/screen_capture.dart';
 import 'package:uconnect_mobile/core/screen/screen_host.dart';
+import 'package:uconnect_mobile/core/screen/screen_viewer.dart';
 import 'package:uconnect_mobile/core/session.dart';
 import 'package:uconnect_mobile/core/storage/storage_client.dart';
 import 'package:uconnect_mobile/core/storage/storage_offerer.dart';
@@ -72,6 +81,7 @@ const streamUrl = String.fromEnvironment('E2E_H264');
 const relayMode = int.fromEnvironment('E2E_RELAY', defaultValue: 1);
 const capture = String.fromEnvironment('E2E_CAPTURE');
 const syncOption = String.fromEnvironment('E2E_SYNC');
+const watchCameras = bool.fromEnvironment('E2E_WATCH_CAMERAS');
 
 /// The folder the host offers for sync: the same id on every member.
 const syncFolderId = 'e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0';
@@ -166,6 +176,42 @@ List<CaptureUnit> readUnits(Uint8List data) {
     at += length;
   }
   return units;
+}
+
+/// Watches `dev`'s camera for six seconds and writes what arrived to
+/// camera-seen.txt in the share.
+Future<void> watchCamera(ScreenViewer viewer, String dev, String shareDir) async {
+  var units = 0, keyframes = 0, bytes = 0;
+  var firstIsKeyframe = false, firstHasParameterSets = false;
+  final sub = viewer.units.listen((u) {
+    if (units == 0) {
+      firstIsKeyframe = u.keyframe;
+      // An SPS (NAL type 7) right behind the first start code.
+      final b = u.bytes;
+      firstHasParameterSets = b.length > 4 &&
+          b[0] == 0 && b[1] == 0 && b[2] == 0 && b[3] == 1 && (b[4] & 0x1F) == 7;
+    }
+    units++;
+    if (u.keyframe) keyframes++;
+    bytes += u.bytes.length;
+  });
+  viewer.request(dev, wantControl: false, maxWidth: 1280, maxFps: 30);
+  // Up to ten seconds to start, then six of watching.
+  for (var i = 0; i < 50 && viewer.state != ViewerState.active; i++) {
+    if (viewer.state == ViewerState.failed) break;
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+  }
+  final started = viewer.state == ViewerState.active;
+  if (started) await Future<void>.delayed(const Duration(seconds: 6));
+  final report = 'state=${viewer.state.name} size=${viewer.width}x${viewer.height} '
+      'units=$units keyframes=$keyframes bytes=$bytes '
+      'firstIsKeyframe=$firstIsKeyframe firstHasParameterSets=$firstHasParameterSets '
+      'cameras=${viewer.cameras.join('|')} error=${viewer.error}';
+  viewer.stop();
+  await sub.cancel();
+  // ignore: avoid_print
+  print('E2E_HOST camera $report');
+  await File('$shareDir/camera-seen.txt').writeAsString(report);
 }
 
 Future<Uint8List> fetchStream(String url) async {
@@ -306,7 +352,22 @@ Future<void> serveHost() async {
       });
       offer();
     }
-    if (capture == 'screen') {
+    if (capture == 'camera') {
+      // The device's camera through its real encoder, as AppState.cameraHost
+      // offers it (in the iOS simulator: the simulated camera).
+      final camera = CameraCaptureController();
+      camera.allCameras = await camera.cameras();
+      ScreenHost(session, camera, RemoteInput(),
+              askConsent: (dev, name,
+                      {bool control = false, bool camera = false}) async =>
+                  true,
+              prefix: 'cam',
+              videoKind: 3,
+              viewPerm: Perm.cameraView,
+              directPerm: Perm.cameraDirect)
+          .offered = true;
+      services.add(Services.camera);
+    } else if (capture == 'screen') {
       ScreenHost(session, CaptureController(), RemoteInput(),
               askConsent: (dev, name,
                       {bool control = false, bool camera = false}) async =>
@@ -360,6 +421,11 @@ Future<void> serveHost() async {
     await session.start(
         SessionOptions(server: server, creds: creds, relayMode: relayMode));
 
+    final cameraViewer =
+        watchCameras && shareDir.isNotEmpty ? ScreenViewer(session, prefix: 'cam') : null;
+    final camerasSeen = <String>{};
+    var watching = false;
+
     final deadline = DateTime.now().add(const Duration(seconds: serveSeconds));
     var announced = false;
     while (DateTime.now().isBefore(deadline)) {
@@ -372,6 +438,20 @@ Future<void> serveHost() async {
         print('E2E_HOST READY ${session.selfId}');
       }
       if (stopFile.isNotEmpty && File(stopFile).existsSync()) break;
+      if (cameraViewer != null && !watching) {
+        for (final p in session.peers.values.toList()) {
+          if (p.stateCode == 3 &&
+              p.identityState == 'verified' &&
+              p.services.contains(Services.camera) &&
+              p.grantedToMe.contains(Perm.cameraView) &&
+              camerasSeen.add(p.devId)) {
+            watching = true;
+            unawaited(watchCamera(cameraViewer, p.devId, shareDir)
+                .whenComplete(() => watching = false));
+            break;
+          }
+        }
+      }
       if (client != null) {
         // Bounded: a peer that leaves mid-request must not hold the host up.
         await fetchFromPhones(session, client, shareDir, fetched)

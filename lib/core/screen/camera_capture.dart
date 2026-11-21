@@ -1,7 +1,7 @@
-// Dart side of the native camera capture + encoder (CameraCapturer.kt): opens
-// a device camera through Camera2, encodes it to H.264 and streams the access
-// units, the same shape as screen_capture.dart so the host can drive either.
-// Android only; elsewhere camera capture is unsupported.
+// Dart side of the native camera capture + encoder (CameraCapturer.kt on
+// Android, CameraCapturer.swift on iOS): opens a device camera, encodes it to
+// H.264 and streams the access units, the same shape as screen_capture.dart so
+// the host can drive either. Elsewhere camera capture is unsupported.
 
 import 'dart:async';
 import 'dart:io';
@@ -26,8 +26,8 @@ class CameraCaptureController implements VideoSource {
   static const _channel = MethodChannel('uconnect/camera');
   static const _events = EventChannel('uconnect/camera/au');
 
-  /// Which camera to open on the next start: a Camera2 id, or null for the
-  /// first back-facing one.
+  /// Which camera to open on the next start: the platform's id for it, or
+  /// null for the first back-facing one.
   String? cameraId;
 
   /// Every camera on the device (loaded once by AppState), and the ids the user
@@ -41,7 +41,7 @@ class CameraCaptureController implements VideoSource {
       : [for (final c in allCameras) if (offeredIds.contains(c.id)) c];
 
   @override
-  bool get supported => Platform.isAndroid;
+  bool get supported => Platform.isAndroid || Platform.isIOS;
 
   @override
   Future<List<String>> sources() async =>
