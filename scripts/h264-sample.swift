@@ -3,7 +3,12 @@
 // the stream a uConnect host sends (Annex-B access units, no B-frames, SPS and
 // PPS inside every keyframe).
 //
-//   swift scripts/h264-sample.swift <out file> [width height frames fps]
+//   swift scripts/h264-sample.swift <out file> [width height frames fps [kbps [busy[:blocks]]]]
+//
+// The default picture is colour bars with a square crossing them, which costs
+// almost nothing to encode. "busy" adds a field of blocks that change every
+// frame, so the stream really is as large as the bitrate asked for: the one
+// to send over a network whose capacity is in question.
 //
 // File format, repeated per access unit: a 4-byte big-endian length, one byte
 // that is 1 for a keyframe, then that many bytes of Annex-B.
@@ -23,6 +28,13 @@ let width = args.count > 2 ? Int(args[2])! : 640
 let height = args.count > 3 ? Int(args[3])! : 360
 let frames = args.count > 4 ? Int(args[4])! : 90
 let fps = args.count > 5 ? Int(args[5])! : 30
+let kbps = args.count > 6 ? Int(args[6])! : 1500
+// "busy" or "busy:<blocks>": how many blocks change on every frame (400 if
+// not said). The encoder cannot hold a hard picture to a low bitrate, so the
+// number of blocks is what sets how large the stream really is.
+let busyArg = args.count > 7 ? args[7] : ""
+let busy = busyArg.hasPrefix("busy")
+let blocks = busyArg.contains(":") ? Int(busyArg.split(separator: ":")[1]) ?? 400 : 400
 
 var output = Data()
 var units = 0
@@ -95,7 +107,12 @@ VTSessionSetProperty(
 VTSessionSetProperty(
   session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: fps as CFNumber)
 VTSessionSetProperty(
-  session, key: kVTCompressionPropertyKey_AverageBitRate, value: 1_500_000 as CFNumber)
+  session, key: kVTCompressionPropertyKey_AverageBitRate, value: (kbps * 1000) as CFNumber)
+// A ceiling as well: the average alone is a wish the encoder overruns freely
+// on a picture as hard as the busy one.
+VTSessionSetProperty(
+  session, key: kVTCompressionPropertyKey_DataRateLimits,
+  value: [kbps * 1000 / 8, 1] as CFArray)
 VTCompressionSessionPrepareToEncodeFrames(session)
 
 let attributes: [CFString: Any] = [
@@ -126,6 +143,20 @@ for frame in 0..<frames {
     context.setFillColor(red: c.0, green: c.1, blue: c.2, alpha: 1)
     context.fill(CGRect(x: CGFloat(i) * barWidth, y: 0, width: barWidth + 1, height: CGFloat(height)))
   }
+  if busy {
+    // A deterministic scatter of blocks, different on every frame.
+    var seed = UInt64(frame) &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+    func next() -> CGFloat {
+      seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+      return CGFloat((seed >> 33) % 1000) / 1000
+    }
+    let block = CGFloat(height) / 18
+    for _ in 0..<blocks {
+      context.setFillColor(red: next(), green: next(), blue: next(), alpha: 1)
+      context.fill(
+        CGRect(x: next() * CGFloat(width), y: next() * CGFloat(height), width: block, height: block))
+    }
+  }
   let progress = CGFloat(frame) / CGFloat(max(frames - 1, 1))
   let side = CGFloat(height) / 4
   context.setFillColor(red: 1, green: 1, blue: 1, alpha: 1)
@@ -151,4 +182,6 @@ guard units == frames else {
   exit(1)
 }
 try! output.write(to: URL(fileURLWithPath: outPath))
-print("\(outPath): \(units) access units, \(keyframes) keyframes, \(width)x\(height) at \(fps) fps, \(output.count) bytes")
+let seconds = Double(frames) / Double(fps)
+print(
+  "\(outPath): \(units) access units, \(keyframes) keyframes, \(width)x\(height) at \(fps) fps, \(output.count) bytes, \(Int(Double(output.count) * 8 / seconds / 1000)) kbit/s")

@@ -22,6 +22,24 @@
 // It writes the ready file once published and serves until the stop file
 // appears (or E2E_SERVE_SECONDS pass). Point UCONNECT_C_LIBRARY at a host
 // build of uconnect_c first. scripts/e2e-ios.sh does all of this.
+//
+// The same host runs on a phone through integration_test/device_host_test.dart
+// (`flutter test integration_test/device_host_test.dart -d <device>
+// --no-uninstall ...`), which is how a stream is sent over a real mobile
+// network. There it prints "E2E_HOST READY <id>" instead of writing a file,
+// and takes:
+//
+//   E2E_SHARE=@temp   a share made in the app's temporary folder, holding
+//                     hello.txt
+//   E2E_H264=<url>    the stream fetched over HTTP instead of read from a file
+//   E2E_RELAY=0       let peers connect directly when they can (the default,
+//                     1, forces the relay: deterministic on one machine)
+//   E2E_CAPTURE=screen   share the device's real screen with its real encoder
+//                     instead of the recording (Android: the system's consent
+//                     dialog comes up on the device when a viewer asks). The
+//                     recording is a fixed stream, so on a thin or lossy path
+//                     the sender can only drop frames; the real encoder lowers
+//                     its bitrate and size as the app does.
 
 import 'dart:async';
 import 'dart:io';
@@ -42,8 +60,11 @@ import 'package:uconnect_mobile/uconnect/uconnect.dart';
 
 const server = String.fromEnvironment('E2E_SERVER');
 const topic = String.fromEnvironment('E2E_TOPIC');
-const shareDir = String.fromEnvironment('E2E_SHARE');
+const shareOption = String.fromEnvironment('E2E_SHARE');
 const streamFile = String.fromEnvironment('E2E_H264_FILE');
+const streamUrl = String.fromEnvironment('E2E_H264');
+const relayMode = int.fromEnvironment('E2E_RELAY', defaultValue: 1);
+const capture = String.fromEnvironment('E2E_CAPTURE');
 const streamSize = String.fromEnvironment('E2E_H264_SIZE', defaultValue: '640x360');
 const readyFile = String.fromEnvironment('E2E_READY_FILE');
 const stopFile = String.fromEnvironment('E2E_STOP_FILE');
@@ -136,10 +157,25 @@ List<CaptureUnit> readUnits(Uint8List data) {
   return units;
 }
 
+Future<Uint8List> fetchStream(String url) async {
+  final http = HttpClient();
+  try {
+    final response = await (await http.getUrl(Uri.parse(url))).close();
+    if (response.statusCode != 200) {
+      fail('GET $url answered ${response.statusCode}');
+    }
+    final bytes = BytesBuilder(copy: false);
+    await response.forEach(bytes.add);
+    return bytes.takeBytes();
+  } finally {
+    http.close();
+  }
+}
+
 /// Reads from-phone.txt out of the "Phone" share of each connected peer that
 /// offers one and lets this host read it, into this host's own share.
-Future<void> fetchFromPhones(
-    Session session, StorageClient client, Set<String> done) async {
+Future<void> fetchFromPhones(Session session, StorageClient client,
+    String shareDir, Set<String> done) async {
   for (final p in session.peers.values.toList()) {
     if (p.stateCode != 3 || !p.hasHello || done.contains(p.devId)) continue;
     if (!p.services.contains(Services.storage) ||
@@ -170,16 +206,31 @@ void main() {
     return;
   }
 
-  test('serve a share and a recorded screen until told to stop', () async {
+  test('serve a share and a recorded screen until told to stop', serveHost,
+      timeout: Timeout.none);
+}
+
+/// Joins the topic and serves until told to stop or the time is up. The body
+/// of the test above, and of integration_test/device_host_test.dart.
+Future<void> serveHost() async {
+  {
     final creds = TopicCreds.parse(topic)!;
     final stateDir = await Directory.systemTemp.createTemp('uc-e2e-host');
     final identity = await Identity.loadOrCreate('${stateDir.path}/identity');
     final session = Session()..identity = identity;
-    session.logLines.listen(stderr.writeln);
+    // print, not stderr: on a device only what is printed comes back.
+    // ignore: avoid_print
+    session.logLines.listen((line) => print('E2E_HOST log $line'));
 
     final services = <String>[];
     StorageClient? client;
     final fetched = <String>{}; // peers whose share has been read
+    var shareDir = shareOption;
+    if (shareDir == '@temp') {
+      shareDir = '${Directory.systemTemp.path}/uc-e2e-host-share';
+      await Directory(shareDir).create(recursive: true);
+      await File('$shareDir/hello.txt').writeAsString('hello from the desk');
+    }
     if (shareDir.isNotEmpty) {
       await Directory(shareDir).create(recursive: true);
       StorageOfferer(session)
@@ -188,10 +239,19 @@ void main() {
       client = StorageClient(session);
       services.add(Services.storage);
     }
-    if (streamFile.isNotEmpty) {
-      final units = readUnits(await File(streamFile).readAsBytes());
+    if (capture == 'screen') {
+      ScreenHost(session, CaptureController(), RemoteInput(),
+              askConsent: (dev, name,
+                      {bool control = false, bool camera = false}) async =>
+                  true)
+          .offered = true;
+      services.add(Services.screen);
+    } else if (streamFile.isNotEmpty || streamUrl.isNotEmpty) {
+      final units = readUnits(streamFile.isNotEmpty
+          ? await File(streamFile).readAsBytes()
+          : await fetchStream(streamUrl));
       if (units.isEmpty || !units.first.keyframe) {
-        fail('$streamFile is not a stream from scripts/h264-sample.swift');
+        fail('$streamFile$streamUrl is not a stream from scripts/h264-sample.swift');
       }
       final wh = streamSize.split('x').map(double.parse).toList();
       final size = Size(wh[0], wh[1]);
@@ -229,7 +289,7 @@ void main() {
     }));
 
     await session.start(
-        SessionOptions(server: server, creds: creds, relayMode: 1));
+        SessionOptions(server: server, creds: creds, relayMode: relayMode));
 
     final deadline = DateTime.now().add(const Duration(seconds: serveSeconds));
     var announced = false;
@@ -239,12 +299,25 @@ void main() {
         if (readyFile.isNotEmpty) {
           await File(readyFile).writeAsString('READY ${session.selfId}\n');
         }
+        // ignore: avoid_print
+        print('E2E_HOST READY ${session.selfId}');
       }
       if (stopFile.isNotEmpty && File(stopFile).existsSync()) break;
-      if (client != null) await fetchFromPhones(session, client, fetched);
+      if (client != null) {
+        // Bounded: a peer that leaves mid-request must not hold the host up.
+        await fetchFromPhones(session, client, shareDir, fetched)
+            .timeout(const Duration(seconds: 20), onTimeout: () {});
+      }
       await Future<void>.delayed(const Duration(milliseconds: 500));
     }
-    await session.dispose();
+    // ignore: avoid_print
+    print('E2E_HOST serving ended');
+    await session.dispose().timeout(const Duration(seconds: 10), onTimeout: () {
+      // ignore: avoid_print
+      print('E2E_HOST the session did not shut down in 10 s');
+    });
     await stateDir.delete(recursive: true);
-  }, timeout: Timeout.none);
+    // ignore: avoid_print
+    print('E2E_HOST done');
+  }
 }
