@@ -35,7 +35,11 @@ $peer = Start-Process "dart" -ArgumentList @("run", (Join-Path $root "bin\host_p
 try {
   & adb @adbArgs reverse "tcp:$port" "tcp:$port"
   if ($LASTEXITCODE -ne 0) { exit 1 }
+  # --no-uninstall: `flutter test` removes the app from the device after an
+  # integration test unless told not to, and on a phone that also has the real
+  # app (same package) that takes its identity and settings with it.
   $flutterArgs = @("test", "integration_test/storage_e2e_test.dart",
+    "--no-uninstall",
     "--dart-define=E2E_SERVER=127.0.0.1:$port",
     "--dart-define=E2E_TOPIC=$topic")
   if ($DeviceId) { $flutterArgs += @("-d", $DeviceId) }
@@ -46,6 +50,8 @@ try {
   exit $code
 } finally {
   & adb @adbArgs reverse --remove "tcp:$port" 2>$null
-  if (-not $peer.HasExited) { Stop-Process -Id $peer.Id -Force -Confirm:$false }
+  # The whole tree: `dart` is a launcher, and the VM running the peer is its
+  # child, which stopping the launcher alone leaves running.
+  if (-not $peer.HasExited) { & taskkill /PID $peer.Id /T /F 2>$null | Out-Null }
   if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force -Confirm:$false }
 }
