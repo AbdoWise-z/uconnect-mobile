@@ -11,38 +11,30 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
-# Pinned to the uconnect revision the desktop app ships with, plus the one
-# commit that lets the library compile for iOS (uconnect PR #79; it changes
-# nothing on other platforms). Bump deliberately, with a round of E2E tests.
+# Pinned to one uconnect revision: the one the desktop app ships with, plus
+# what the phones need of the library (it compiles for iOS, builds its own iOS
+# framework, and reaches IPv4 hosts from an IPv6-only mobile network). Bump
+# deliberately, with a round of E2E tests.
 set(UCONNECT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+# The library's command-line programs are of no use to the app or its tests.
+set(UCONNECT_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(UCONNECT_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 option(UCMOBILE_BUILD_SERVER "Also build uconnect-rendezvous (for host-side tests)" OFF)
 set(UCONNECT_BUILD_SERVER ${UCMOBILE_BUILD_SERVER} CACHE BOOL "" FORCE)
 FetchContent_Declare(
     uconnect
     GIT_REPOSITORY https://github.com/AbdoWise-z/uconnect.git
-    GIT_TAG fd147a370998e7973d2720f227af4c462102ebe5
+    GIT_TAG ddbeaf94ddeedf748d715b4d9886d6967939388d
 )
 FetchContent_MakeAvailable(uconnect)
-
-# uconnect's targets use ${CMAKE_SOURCE_DIR}/include, which only points at its
-# own headers when it is the top-level project. Here it resolves to this
-# directory, so mirror the public headers (same as uconnect-desktop does).
-file(COPY ${uconnect_SOURCE_DIR}/include/ DESTINATION ${CMAKE_SOURCE_DIR}/include)
 
 # 16 KiB page alignment is required for arm64 .so files on Android 15+.
 if (ANDROID)
     target_link_options(uconnect_c PRIVATE "-Wl,-z,max-page-size=16384")
 endif ()
 
-# iOS takes an app's own dynamic code only as a framework, never a bare dylib,
-# so uconnect_c is built as uconnect_c.framework there. scripts/build-ios.sh
-# folds the device and simulator builds into one XCFramework, which the Runner
-# target embeds and Dart opens by name (lib/uconnect/bindings.dart).
-if (IOS)
-    set_target_properties(uconnect_c PROPERTIES
-        FRAMEWORK TRUE
-        MACOSX_FRAMEWORK_IDENTIFIER dev.uconnect.uconnect-c
-        MACOSX_FRAMEWORK_SHORT_VERSION_STRING 1.0.0
-        MACOSX_FRAMEWORK_BUNDLE_VERSION 1
-        MACOSX_FRAMEWORK_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/ios-framework-Info.plist.in)
-endif ()
+# iOS takes an app's own dynamic code only as a framework, never a bare dylib.
+# The library builds uconnect_c as uconnect_c.framework there by itself;
+# scripts/build-ios.sh folds the device and simulator builds into one
+# XCFramework, which the Runner target embeds and Dart opens by name
+# (lib/uconnect/bindings.dart).

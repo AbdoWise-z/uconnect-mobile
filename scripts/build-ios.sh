@@ -38,4 +38,23 @@ xcodebuild -create-xcframework \
   -framework "$out/device/$framework" \
   -framework "$out/simulator/$framework" \
   -output "$out/uconnect_c.xcframework"
-echo "made $out/uconnect_c.xcframework"
+
+# Dart finds the C functions by name when the app runs (lib/uconnect/
+# bindings.dart), so nothing at build time notices one that is missing from the
+# library, hidden, or stripped: the app would start and fail at the first call
+# that needs it. Check here that every slice exports every name Dart asks for.
+wanted="$(grep -o "'uconnect_[a-z0-9_]*'" "$root/lib/uconnect/bindings.dart" | tr -d "'" | sort -u)"
+[ -n "$wanted" ] || { echo "found no uconnect_ names in bindings.dart" >&2; exit 1; }
+for slice in "$out"/uconnect_c.xcframework/*/uconnect_c.framework/uconnect_c; do
+  for arch in $(lipo -archs "$slice"); do
+    nm -gU -arch "$arch" "$slice" | awk '{print $NF}' | sed 's/^_//' | sort -u > "$out/.exports"
+    missing="$(printf '%s\n' "$wanted" | comm -23 - "$out/.exports")"
+    if [ -n "$missing" ]; then
+      echo "$slice ($arch) does not export:" >&2
+      echo "$missing" | sed 's/^/  /' >&2
+      exit 1
+    fi
+  done
+done
+rm -f "$out/.exports"
+echo "made $out/uconnect_c.xcframework ($(printf '%s\n' "$wanted" | wc -l | tr -d ' ') C functions exported by every slice)"
