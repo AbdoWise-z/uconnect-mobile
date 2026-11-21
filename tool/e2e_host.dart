@@ -16,6 +16,11 @@
 // share. It has no decoder; that the stream arrives whole and starts with a
 // keyframe carrying parameter sets is what it can tell.
 //
+// With E2E_OFFER_DISPLAY=true it asks each peer that offers `display` to be
+// its extended display (protocol 7.6: dsp.request, then on dsp.accept a screen
+// session under dsp.* with video on datagram kind 4), playing the recording as
+// the monitor. What the peer answered goes to display-asked.txt in the share.
+//
 // It also reads what a device shares: from every peer that offers a share
 // named "Phone" holding from-phone.txt, it downloads that file into its own
 // share as fetched-from-phone.txt, where the device's test finds it again.
@@ -82,6 +87,7 @@ const relayMode = int.fromEnvironment('E2E_RELAY', defaultValue: 1);
 const capture = String.fromEnvironment('E2E_CAPTURE');
 const syncOption = String.fromEnvironment('E2E_SYNC');
 const watchCameras = bool.fromEnvironment('E2E_WATCH_CAMERAS');
+const offerDisplay = bool.fromEnvironment('E2E_OFFER_DISPLAY');
 
 /// The folder the host offers for sync: the same id on every member.
 const syncFolderId = 'e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0';
@@ -352,6 +358,48 @@ Future<void> serveHost() async {
       });
       offer();
     }
+    // The extended display this host asks peers to show: its own handler
+    // first, for the answers to dsp.request, then a screen host under dsp.*
+    // for the session itself.
+    final displayAsked = <String, int>{}; // peer -> request id
+    ScreenHost? displayHost;
+    if (offerDisplay && (streamFile.isNotEmpty || streamUrl.isNotEmpty)) {
+      final wh = streamSize.split('x').map(double.parse).toList();
+      final source = RecordedSource(
+          readUnits(streamFile.isNotEmpty
+              ? await File(streamFile).readAsBytes()
+              : await fetchStream(streamUrl)),
+          Size(wh[0], wh[1]));
+      session.addControlHandler((dev, msg) {
+        final t = msg['t'];
+        if (t != 'dsp.wait' && t != 'dsp.err' && t != 'dsp.accept') return false;
+        final request = msg['request'] is num ? (msg['request'] as num).toInt() : 0;
+        if (request == 0 || displayAsked[dev] != request) return true;
+        // ignore: avoid_print
+        print('E2E_HOST display ${msg['t']} $msg');
+        if (shareDir.isNotEmpty) {
+          File('$shareDir/display-asked.txt').writeAsStringSync('$msg');
+        }
+        if (t == 'dsp.accept') {
+          final maxWidth = msg['maxWidth'] is num ? (msg['maxWidth'] as num).toInt() : 1920;
+          final maxFps = msg['maxFps'] is num ? (msg['maxFps'] as num).toInt() : 60;
+          unawaited(displayHost!
+              .startUnasked(dev, request, maxWidth: maxWidth, maxFps: maxFps));
+        }
+        return true;
+      });
+      displayHost = ScreenHost(session, source, RemoteInput(),
+          askConsent: (dev, name,
+                  {bool control = false, bool camera = false}) async =>
+              true,
+          prefix: 'dsp',
+          videoKind: 4,
+          viewPerm: Perm.displayShow,
+          directPerm: Perm.displayDirect)
+        ..offered = true;
+    }
+    var nextDisplayRequest = 1;
+
     if (capture == 'camera') {
       // The device's camera through its real encoder, as AppState.cameraHost
       // offers it (in the iOS simulator: the simulated camera).
@@ -438,6 +486,25 @@ Future<void> serveHost() async {
         print('E2E_HOST READY ${session.selfId}');
       }
       if (stopFile.isNotEmpty && File(stopFile).existsSync()) break;
+      if (displayHost != null) {
+        for (final p in session.peers.values.toList()) {
+          if (p.stateCode == 3 &&
+              p.identityState == 'verified' &&
+              p.services.contains(Services.display) &&
+              !displayAsked.containsKey(p.devId)) {
+            final request = nextDisplayRequest++;
+            displayAsked[p.devId] = request;
+            // ignore: avoid_print
+            print('E2E_HOST display asking ${p.displayName}');
+            session.sendControl(p.devId, {
+              't': 'dsp.request',
+              'request': request,
+              'mode': 'match',
+              'codecs': const ['h264'],
+            });
+          }
+        }
+      }
       if (cameraViewer != null && !watching) {
         for (final p in session.peers.values.toList()) {
           if (p.stateCode == 3 &&

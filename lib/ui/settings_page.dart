@@ -153,6 +153,7 @@ class _SettingsPageState extends State<SettingsPage> {
         ('Storage', _storagePage),
         ('Camera', _cameraPage),
         ('Screen sharing', _screenPage),
+        ('Extended display', _displayPage),
         ('Remote control', _controlPage),
         ('Watching', _watchingPage),
         ('Special rules', _specialPage),
@@ -272,6 +273,14 @@ class _SettingsPageState extends State<SettingsPage> {
             subtitle: _onOff(store.offerScreen),
             onTap: () => _open('Screen sharing', _screenPage),
             selected: _isOpen('Screen sharing'),
+          ),
+          SettingsTile(
+            icon: Icons.desktop_windows_outlined,
+            iconColor: const Color(0xFF6C8EDB),
+            title: 'Extended display',
+            subtitle: _onOff(store.offerDisplay),
+            onTap: () => _open('Extended display', _displayPage),
+            selected: _isOpen('Extended display'),
           ),
           SettingsTile(
             icon: Icons.touch_app_outlined,
@@ -681,6 +690,26 @@ class _SettingsPageState extends State<SettingsPage> {
           ],
         ),
         if (state.store.offerCamera) ..._cameraSourceSections(),
+      ];
+
+  List<Widget> _displayPage(BuildContext context) => [
+        SettingsSection(
+          footer: 'A computer your special or network rules allow can use this '
+              'device as an extra screen: it gains a monitor, shown here full '
+              'screen. You are asked each time unless you let that computer '
+              'do it without asking. Both devices need to be on the same '
+              'network, or close to it: the picture is not sent through a '
+              'relay.',
+          children: [
+            SettingsSwitchTile(
+              icon: Icons.desktop_windows_outlined,
+              iconColor: const Color(0xFF6C8EDB),
+              title: 'Act as an extended display',
+              value: state.store.offerDisplay,
+              onChanged: (on) => state.saveSettings(offerDisplay: on),
+            ),
+          ],
+        ),
       ];
 
   List<Widget> _screenPage(BuildContext context) => [

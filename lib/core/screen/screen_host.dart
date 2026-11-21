@@ -189,7 +189,26 @@ class ScreenHost {
   int _intf(Map<String, Object?> msg, String k) =>
       msg[k] is num ? (msg[k] as num).toInt() : 0;
 
-  Future<void> _onRequest(String dev, Map<String, Object?> msg) async {
+  /// Starts a session this host asked for itself rather than one a viewer
+  /// requested: an extended display (7.6), where the host sends dsp.request
+  /// and the display device answers dsp.accept. The caller has done that
+  /// exchange; `request` is its id, and the limits are the display device's.
+  /// No phone hosts a display of its own: this is the E2E host's side
+  /// (tool/e2e_host.dart), which plays a recording as the monitor.
+  Future<void> startUnasked(String dev, int request,
+          {int maxWidth = 1920, int maxFps = 60}) =>
+      _onRequest(
+          dev,
+          {
+            'request': request,
+            'maxWidth': maxWidth,
+            'maxFps': maxFps,
+            'codecs': const ['h264'],
+          },
+          unasked: true);
+
+  Future<void> _onRequest(String dev, Map<String, Object?> msg,
+      {bool unasked = false}) async {
     final request = _intf(msg, 'request');
     if (request == 0) return;
     void err(String code) => session.sendControl(
@@ -211,11 +230,12 @@ class ScreenHost {
     final perms = session.permissionsFor(dev);
     final peer = session.peers[dev];
     if (peer == null || peer.identityState != 'verified') return err('forbidden');
-    if (!perms.contains(viewPerm)) return err('forbidden');
+    if (!unasked && !perms.contains(viewPerm)) return err('forbidden');
 
     // Consent, unless the peer holds the matching "direct" grant. A camera has
-    // no direct grant (directPerm is null), so it always asks.
-    if (directPerm == null || !perms.contains(directPerm!)) {
+    // no direct grant (directPerm is null), so it always asks. A session this
+    // host asked for needs neither: the asking was its own.
+    if (!unasked && (directPerm == null || !perms.contains(directPerm!))) {
       session.sendControl(dev, {'t': '$prefix.wait', 'request': request});
       final ok = await askConsent(dev, peer.displayName,
           control: false, camera: prefix == 'cam');

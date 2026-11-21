@@ -18,6 +18,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show debugPrint;
 
+import '../../uconnect/uconnect.dart' show ucFallbackNone;
 import '../session.dart';
 import 'media_packet.dart';
 import 'media_receiver.dart';
@@ -68,7 +69,10 @@ class ScreenViewer {
   final Session session;
 
   /// 'scr' for a screen, 'cam' for a camera: the handshakes are identical
-  /// bar the message prefix and the video datagram kind (1 vs 3).
+  /// bar the message prefix and the video datagram kind (1 vs 3). 'dsp' is an
+  /// extended display shown here (7.6): kind 4, its cursor on kind 5, and a
+  /// session the host starts after [expect] instead of one asked for with
+  /// [request].
   final String prefix;
 
   ViewerState state = ViewerState.idle;
@@ -176,7 +180,15 @@ class ScreenViewer {
 
   String _t(String suffix) => '$prefix.$suffix';
 
-  int get _videoKind => prefix == 'cam' ? 3 : 1;
+  int get _videoKind => switch (prefix) { 'cam' => 3, 'dsp' => 4, _ => 1 };
+  int get _cursorKind => prefix == 'dsp' ? 5 : 2;
+
+  /// What the media channel may fall back to. An extended display is for
+  /// nearby devices and needs direct UDP (7.6), unless this device is set to
+  /// relay everything, where there is no direct path to insist on.
+  int get _fallback => prefix == 'dsp' && !session.forceRelay
+      ? ucFallbackNone
+      : session.mediaFallback;
 
   /// Report the decode time of the last access unit (ms); folded into the
   /// next feedback so the sender can pace to the viewer.
@@ -219,6 +231,28 @@ class ScreenViewer {
       if (_session == 0 &&
           (state == ViewerState.requesting || state == ViewerState.waiting)) {
         _fail('No answer to the request.');
+      }
+    });
+    _notify();
+  }
+
+  /// Waits for a session the host starts itself: an extended display, after
+  /// this device accepted the host's `request` (7.6). The host has 15 s to
+  /// create its monitor and send dsp.started.
+  void expect(String devId, int request) {
+    stop();
+    _dev = devId;
+    _request = request;
+    state = ViewerState.requesting;
+    error = '';
+    statusDetail = '';
+    hostStats = const {};
+    Timer(const Duration(seconds: 15), () {
+      if (_session == 0 &&
+          _dev == devId &&
+          _request == request &&
+          state == ViewerState.requesting) {
+        _fail('The other device did not start its display.');
       }
     });
     _notify();
@@ -376,7 +410,7 @@ class ScreenViewer {
     _lastUnitAt = DateTime.now();
     _media = MediaReceiver(session: token, kind: _videoKind, fps: fps);
     // Open the media datagram channel with the fallback the relay mode allows.
-    session.node?.openDatagrams(session.topicId, _dev!, session.mediaFallback);
+    session.node?.openDatagrams(session.topicId, _dev!, _fallback);
     _reportTimer =
         Timer.periodic(const Duration(seconds: 1), (_) => _everySecond());
     _tick = Timer.periodic(const Duration(milliseconds: 10), (_) => _onTick());
@@ -407,7 +441,7 @@ class ScreenViewer {
     final media = _media;
     if (media == null || dev != _dev || state != ViewerState.active || d.isEmpty) return;
     final kind = d[0];
-    if (kind == 2) {
+    if (kind == _cursorKind) {
       _onCursorMove(d);
       return;
     }
@@ -478,7 +512,7 @@ class ScreenViewer {
   }
 
   void _onCursorMove(Uint8List d) {
-    // [u8=2][u16 session][u32 seq][i32 x][i32 y][u8 visible], big endian.
+    // [u8 kind][u16 session][u32 seq][i32 x][i32 y][u8 visible], big endian.
     if (d.length < 16) return;
     final bd = ByteData.sublistView(d);
     if (bd.getUint16(1) != _session) return;

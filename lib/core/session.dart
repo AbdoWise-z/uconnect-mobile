@@ -183,6 +183,10 @@ class Session {
   /// The datagram fallback the current relay mode allows for media channels;
   /// screen_viewer/host open their channels with it.
   int mediaFallback = ucFallbackRelay;
+
+  /// Everything goes through the relay (the "always relay" mode): there is no
+  /// direct path for a channel to insist on.
+  bool forceRelay = false;
   String? selfId;
 
   bool _published = false;
@@ -340,6 +344,7 @@ class Session {
   Future<void> start(SessionOptions options) async {
     await stop();
     mediaFallback = options.mediaFallback;
+    forceRelay = options.forceRelay;
     status = SessionStatus.connecting;
     statusDetail = 'Starting...';
     _notify();

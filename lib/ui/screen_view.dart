@@ -647,7 +647,7 @@ class _ScreenViewState extends State<ScreenView> {
             aspectRatio: aspect,
             child: Stack(fit: StackFit.expand, children: [
               Texture(textureId: id),
-              if (!widget.camera) _CursorOverlay(viewer: _viewer),
+              if (!widget.camera) CursorOverlay(viewer: _viewer),
             ]),
           );
     // Quarter-turn the camera preview (sideways phone, etc.).
@@ -846,7 +846,7 @@ class _ScreenViewState extends State<ScreenView> {
           onPointerCancel: (e) => _endPointer(e.pointer, e.localPosition, box),
           child: Stack(fit: StackFit.expand, children: [
             Texture(textureId: textureId),
-            _CursorOverlay(viewer: _viewer),
+            CursorOverlay(viewer: _viewer),
           ]),
         );
       }),
@@ -875,15 +875,15 @@ class _ScreenViewState extends State<ScreenView> {
 // this the pointer would be invisible on the phone. It fills the video box and
 // scales the cursor's native-pixel position into it. Skipped when the host
 // embeds the cursor in the frame itself (cursorEmbedded).
-class _CursorOverlay extends StatefulWidget {
-  const _CursorOverlay({required this.viewer});
+class CursorOverlay extends StatefulWidget {
+  const CursorOverlay({required this.viewer, super.key});
   final ScreenViewer viewer;
 
   @override
-  State<_CursorOverlay> createState() => _CursorOverlayState();
+  State<CursorOverlay> createState() => _CursorOverlayState();
 }
 
-class _CursorOverlayState extends State<_CursorOverlay> {
+class _CursorOverlayState extends State<CursorOverlay> {
   ui.Image? _image;
   int _hotspotX = 0;
   int _hotspotY = 0;

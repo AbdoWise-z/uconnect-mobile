@@ -87,6 +87,8 @@ class AppStore {
   bool offerScreen = false;
   bool offerControl = false;
   bool offerCamera = false;
+  // Other devices may use this one as an extended display (protocol 7.6).
+  bool offerDisplay = false;
   int relayMode = RelayMode.auto;
   bool get forceRelay => relayMode == RelayMode.always;
   // What to ask for when watching another device's screen or camera (Settings
@@ -158,6 +160,7 @@ class AppStore {
     offerScreen = decoded['offerScreen'] == true;
     offerControl = decoded['offerControl'] == true;
     offerCamera = decoded['offerCamera'] == true;
+    offerDisplay = decoded['offerDisplay'] == true;
     cameraOffered = {
       if (decoded['cameraOffered'] is List)
         for (final c in decoded['cameraOffered'] as List)
@@ -238,6 +241,7 @@ class AppStore {
       'offerScreen': offerScreen,
       'offerControl': offerControl,
       'offerCamera': offerCamera,
+      'offerDisplay': offerDisplay,
       'cameraOffered': cameraOffered.toList()..sort(),
       'cameraMaxWidth': cameraMaxWidth,
       'cameraMaxFps': cameraMaxFps,

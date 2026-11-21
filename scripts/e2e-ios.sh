@@ -11,6 +11,7 @@
 #        platform_e2e_test  power, free space and notification channels
 #        decoder_e2e_test   the native video decoder, fed the stream directly
 #        camera_host_e2e_test  this device's camera, watched by the host
+#        display_e2e_test   this device as the host's extended display
 #        app_ui_e2e_test    the app's screens: join, browse, download, watch
 #                           the host's screen and its camera
 #
@@ -86,6 +87,7 @@ flutter test tool/e2e_host.dart \
   --dart-define="E2E_SERVER=127.0.0.1:$port" --dart-define="E2E_TOPIC=$topic" \
   --dart-define="E2E_SHARE=$share" --dart-define="E2E_H264_FILE=$work/web/sample.h264" \
   --dart-define="E2E_SYNC=$work/synced" --dart-define=E2E_WATCH_CAMERAS=true \
+  --dart-define=E2E_OFFER_DISPLAY=true \
   --dart-define="E2E_H264_SIZE=$size" \
   --dart-define="E2E_READY_FILE=$work/ready" --dart-define="E2E_STOP_FILE=$work/stop" \
   > "$work/peer.log" 2>&1 &
@@ -101,7 +103,7 @@ until [ -f "$work/ready" ]; do
 done
 
 status=0
-for t in ${E2E_TESTS:-storage_e2e_test sync_e2e_test platform_e2e_test decoder_e2e_test camera_host_e2e_test app_ui_e2e_test}; do
+for t in ${E2E_TESTS:-storage_e2e_test sync_e2e_test platform_e2e_test decoder_e2e_test camera_host_e2e_test display_e2e_test app_ui_e2e_test}; do
   # shellcheck disable=SC2086  # E2E_FLUTTER_ARGS is a list of arguments
   flutter test "integration_test/$t.dart" -d "$udid" ${E2E_FLUTTER_ARGS:-} \
     --dart-define="E2E_SERVER=127.0.0.1:$port" \

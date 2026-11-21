@@ -184,6 +184,7 @@ E2E_HOLD=4 sh scripts/e2e-ios.sh   # rest on each screen, to watch or photograph
 | Watch a screen or camera          | ✓ | ✓ (simulator only; camera untested) |
 | Share the phone's screen / camera | ✓ | camera: ✓ (simulator only); screen: — |
 | Be controlled                     | ✓ (accessibility service) | — |
+| Be a computer's extended display  | ✓ | ✓ (simulator only) |
 | Invite links and QR codes         | ✓ | ✓ (untested) |
 
 iOS builds and runs in the simulator (first built 2026-11-20: Xcode 27.2,

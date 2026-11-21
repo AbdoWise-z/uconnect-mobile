@@ -11,6 +11,7 @@ import UserNotifications
 ///   "uconnect/power/events"    the same map whenever either changes
 ///   "uconnect/notify"          show(id, title, text) / cancel(id) / status()
 ///   "uconnect/storage"         freeSpace(path) -> bytes, or -1
+///   "uconnect/window"          keepScreenOn(on)
 ///
 /// "wifi" means an unmetered network: iOS calls the others (cellular, a
 /// personal hotspot) expensive. "charging" is true when the battery state
@@ -30,6 +31,18 @@ final class SyncPlatform: NSObject, FlutterPlugin, FlutterStreamHandler,
       .setMethodCallHandler { call, result in instance.notify(call, result) }
     FlutterMethodChannel(name: "uconnect/storage", binaryMessenger: messenger)
       .setMethodCallHandler { call, result in instance.storage(call, result) }
+    // The screen stays on while this device is another's display
+    // (lib/app/keep_awake.dart).
+    FlutterMethodChannel(name: "uconnect/window", binaryMessenger: messenger)
+      .setMethodCallHandler { call, result in
+        if call.method == "keepScreenOn" {
+          let on = (call.arguments as? [String: Any])?["on"] as? Bool ?? false
+          UIApplication.shared.isIdleTimerDisabled = on
+          result(nil)
+        } else {
+          result(FlutterMethodNotImplemented)
+        }
+      }
     // Shown as banners while the app is in front too: a sync problem is
     // worth saying whichever page is open.
     UNUserNotificationCenter.current().delegate = instance

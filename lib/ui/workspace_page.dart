@@ -7,6 +7,8 @@
 // the devices tab shows the list beside the chosen device's page, and
 // settings show the overview beside the page a row opens.
 
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 
 import '../app/app_state.dart';
@@ -116,9 +118,12 @@ class _WorkspacePageState extends State<WorkspacePage> {
       );
     }
     final chosen = _device;
-    return Row(children: [
+    // The list pane gives way when there is less room than the window's size
+    // says: for a frame or two while the device turns, the layout is still
+    // the old, narrower one, and a fixed pane overflowed it.
+    return LayoutBuilder(builder: (context, box) => Row(children: [
       SizedBox(
-        width: kListPaneWidth,
+        width: min(kListPaneWidth, box.maxWidth / 2),
         child: _DevicesTab(
           state: state,
           selected: chosen,
@@ -133,7 +138,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 text: 'Choose a device to see what it offers\nand what it may do here.')
             : DeviceView(state: state, devId: chosen, embedded: true),
       ),
-    ]);
+    ]));
   }
 }
 

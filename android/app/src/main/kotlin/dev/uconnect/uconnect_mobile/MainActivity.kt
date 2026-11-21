@@ -136,6 +136,21 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
+        // The screen stays on while this device is another's display
+        // (lib/app/keep_awake.dart).
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "uconnect/window")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "keepScreenOn" -> {
+                        val flag = android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                        if (call.argument<Boolean>("on") == true) window.addFlags(flag)
+                        else window.clearFlags(flag)
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
         // Folder sync into a folder the user picks: "All files access" on
         // Android 11+, the storage permission before (lib/app/storage_access.dart).
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "uconnect/storage")

@@ -27,6 +27,8 @@ import '../core/wire.dart';
 import '../uconnect/uconnect.dart';
 import '../ui/format.dart';
 import '../ui/theme.dart';
+import '../core/screen/display_sink.dart';
+import '../ui/display_view.dart';
 import 'background.dart';
 import 'container_paths.dart';
 import 'invite_links.dart';
@@ -102,6 +104,12 @@ class AppState extends ChangeNotifier {
         videoKind: 3,
         viewPerm: Perm.cameraView,
         directPerm: Perm.cameraDirect);
+    displaySink = DisplaySink(session,
+        askConsent: _askDisplayConsent, screen: _localScreen);
+    _subs.add(displaySink.changed.listen((_) {
+      _followDisplay();
+      notifyListeners();
+    }));
     identity =
         await Identity.loadOrCreate('$dataDir${Platform.pathSeparator}identity');
     session.identity = identity;
@@ -235,6 +243,8 @@ class AppState extends ChangeNotifier {
     final screenOn = store.offerScreen && capture.supported;
     final controlOn = store.offerControl && _controlAvailable;
     final cameraOn = store.offerCamera && cameraCapture.supported;
+    final displayOn = store.offerDisplay && displaySupported;
+    displaySink.offered = displayOn;
     screenHost.offered = screenOn;
     screenHost.offerControl = controlOn;
     cameraHost.offered = cameraOn;
@@ -260,6 +270,7 @@ class AppState extends ChangeNotifier {
         if (screenOn) Services.screen,
         if (controlOn) Services.control,
         if (cameraOn) Services.camera,
+        if (displayOn) Services.display,
       ],
     ));
     session.setAccessPolicy(AccessPolicy(
@@ -403,6 +414,7 @@ class AppState extends ChangeNotifier {
     bool? offerScreen,
     bool? offerControl,
     bool? offerCamera,
+    bool? offerDisplay,
     Set<String>? cameraOffered,
     int? cameraMaxWidth,
     int? cameraMaxFps,
@@ -429,6 +441,7 @@ class AppState extends ChangeNotifier {
     if (offerScreen != null) store.offerScreen = offerScreen;
     if (offerControl != null) store.offerControl = offerControl;
     if (offerCamera != null) store.offerCamera = offerCamera;
+    if (offerDisplay != null) store.offerDisplay = offerDisplay;
     if (cameraOffered != null) store.cameraOffered = cameraOffered;
     if (cameraMaxWidth != null) store.cameraMaxWidth = cameraMaxWidth;
     if (cameraMaxFps != null) store.cameraMaxFps = cameraMaxFps;
@@ -536,6 +549,70 @@ class AppState extends ChangeNotifier {
       ),
     );
     return ok ?? false;
+  }
+
+  // --- extended display ----------------------------------------------------------
+  // This device as another's monitor (core/screen/display_sink.dart).
+
+  late final DisplaySink displaySink;
+
+  /// A display is shown through the native video decoder.
+  bool get displaySupported => Platform.isAndroid || Platform.isIOS;
+
+  // The screen a host's monitor will be shown on: this device's, lying down,
+  // as a host sizes its virtual monitor from it.
+  DisplayScreen _localScreen() {
+    final view = WidgetsBinding.instance.platformDispatcher.views.first;
+    final size = view.physicalSize;
+    final refresh = view.display.refreshRate;
+    return DisplayScreen(
+      width: max(size.width, size.height).round(),
+      height: min(size.width, size.height).round(),
+      fps: refresh.isFinite && refresh >= 24 ? refresh.round() : 60,
+      dpi: view.devicePixelRatio * 160,
+    );
+  }
+
+  Future<bool> _askDisplayConsent(String dev, String name) async {
+    final context = navigatorKey.currentContext;
+    if (context == null) return false;
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Use this device as a display?'),
+        content: Text(
+            '"$name" is asking to use this device as an extra screen. Its '
+            'windows will be shown here, full screen, until either of you '
+            'stops.',
+            style: TextStyle(color: UcColors.text)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Deny'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Allow'),
+          ),
+        ],
+      ),
+    );
+    return ok ?? false;
+  }
+
+  bool _displayPageOpen = false;
+
+  // Opens the full-screen page once a request has been accepted; the page
+  // closes itself when the session is over.
+  void _followDisplay() {
+    if (!displaySink.showing || _displayPageOpen) return;
+    final navigator = navigatorKey.currentState;
+    if (navigator == null) return;
+    _displayPageOpen = true;
+    navigator
+        .push(MaterialPageRoute<void>(builder: (_) => DisplayPage(state: this)))
+        .whenComplete(() => _displayPageOpen = false);
   }
 
   // --- folder sync ---------------------------------------------------------------
