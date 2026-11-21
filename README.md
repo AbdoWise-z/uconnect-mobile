@@ -70,6 +70,13 @@
   play back at the pace they were captured after a buffer that follows the
   network (or one you choose), and a statistics overlay shows how both
   devices keep up. Sharing has its own limits in Settings.
+- **An extra screen for a computer.** Switch on Settings › Extended display
+  and a Windows or macOS computer can use the phone or tablet as a real
+  second monitor, sized to the device's own screen and shown full screen in
+  landscape, with the computer's cursor. You are asked each time unless that
+  computer's rules allow it without asking; a tap shows whose display it is
+  and **Stop**. The picture is not sent through a relay, so the two need a
+  direct connection. Touches are not sent back to the computer yet.
 - **Stays connected.** A foreground service keeps the session alive in the
   background for as long as you want to be connected, through drops and
   reconnects (Android will not let a stopped service start again from the
@@ -115,7 +122,8 @@ ciphertext it cannot read. Networking comes from the
 [uconnect](https://github.com/AbdoWise-z/uconnect) library, compiled into the
 app and driven over Dart FFI; the app protocol on top is specified in
 [uconnect-desktop's docs/protocol.md](https://github.com/AbdoWise-z/uconnect-desktop/blob/master/docs/protocol.md).
-Video is H.264, encoded and decoded in hardware through Android's MediaCodec.
+Video is H.264, encoded and decoded in hardware through Android's MediaCodec
+and, on iOS, VideoToolbox.
 
 ## Getting started
 
@@ -161,17 +169,31 @@ powershell -File scripts/e2e-android.ps1
 ```
 
 The same on an iOS simulator, from a Mac (it reaches the server on the Mac's
-own loopback, so nothing is forwarded). It runs that suite; then the native
-video decoder alone, fed a real H.264 stream; then the app's own screens: join
-from the connect page, find the host in the device list, browse its share,
-download a file, and watch its screen. The host there (`tool/e2e_host.dart`)
-shares a "screen" by playing a stream encoded on the spot
-(`scripts/h264-sample.swift`), so no real screen or capture permission is
-involved.
+own loopback, so nothing is forwarded). It runs every file under
+`integration_test/` in turn against one host peer:
+
+| Test | What it covers |
+|---|---|
+| `storage_e2e_test` | identity, listing, download, upload, file operations, and the host reading the phone's own share |
+| `sync_e2e_test` | folder sync with the host, both ways |
+| `platform_e2e_test` | power and network conditions, free space, notifications |
+| `folders_e2e_test` | iOS: a folder outside the app is kept and reopened; the way to the Files picker |
+| `decoder_e2e_test` | the native video decoder alone, fed a real H.264 stream |
+| `camera_host_e2e_test` | the device's camera, watched by the host |
+| `display_e2e_test` | the device as the host's extended display: prompt, picture, Stop |
+| `app_ui_e2e_test` | the app's own screens: join, find the host, browse, download, watch its screen and camera |
+| `share_sheet_e2e_test` | iOS: the share sheet opens (an iPad refuses to without an anchor) |
+
+The host there (`tool/e2e_host.dart`) shares a "screen" by playing a stream
+encoded on the spot (`scripts/h264-sample.swift`), so no real screen or
+capture permission is involved; the simulator's camera is a simulated one.
+`integration_test/device_host_test.dart` is the other way round: a device as
+the host, for testing between two real devices or networks.
 
 ```sh
 sh scripts/e2e-ios.sh              # the booted simulator, or name one
 E2E_HOLD=4 sh scripts/e2e-ios.sh   # rest on each screen, to watch or photograph
+E2E_TESTS="decoder_e2e_test display_e2e_test" sh scripts/e2e-ios.sh   # some of it
 ```
 
 ## Platforms
@@ -227,7 +249,7 @@ service and being controlled are Android-only.
 
 ## Known issues and next up
 
-Where the app stands (updated 2026-10-28):
+Where the app stands (updated 2026-11-21):
 
 - **Streaming over mobile data** holds a lag budget of a second: the phone's
   screen reaches a desktop at 30 fps/480p on a ~1 Mbit/s uplink with 10%
@@ -242,9 +264,21 @@ Where the app stands (updated 2026-10-28):
   froze the app during large syncs. Planning is now paced by how long a round
   takes, a fetch reuses one index of local blocks per change rather than
   building its own, and the state file is written every 30 s while fetching.
+- **Extended display** (2026-11-21): a phone on mobile data showed a Mac's
+  1920×862 virtual monitor at 53 to 63 fps with no loss. Not yet tried with
+  both devices on one Wi-Fi network, with a Windows computer, or on a tablet.
+- **iOS** (2026-11-21) runs in the simulator only, and has never been on a real
+  iPhone: the project has no signing team yet. There it does everything in
+  the table above. A simulator has no camera, no app sandbox and no
+  background suspension, so the real camera, folders picked outside the app
+  and coming back from the background are untested. Sharing the screen and
+  staying connected in the background are not written.
+- **IPv6-only mobile networks** (2026-11-21): the library now reaches IPv4
+  servers and peers through such a network's NAT64 gateway, which matters on
+  iOS (Android gives apps an IPv4 route itself). Covered by unit tests; not
+  yet run on a real network of that kind.
 - **Open:** one viewer at a time when the phone shares; `test/app_smoke_test.dart`
-  hangs (pre-existing); iOS runs in the simulator only so far, with no
-  notifications and nothing kept alive in the background.
+  hangs (pre-existing); the display does not send touches to the computer.
 - **Next up:** bandwidth probing when the encoder has little to send, temporal
   layering so the frame rate can drop without a resize.
 
