@@ -1,0 +1,11 @@
+// Copy to Signing.xcconfig (same folder; git ignores it) and put your Apple
+// developer team's ID here: ten letters and digits, shown under Membership at
+// developer.apple.com/account, or in Xcode > Settings > Accounts. A free
+// Apple ID has a "personal team" with an ID too.
+//
+// With it set, `flutter build ios` and `flutter run` sign for a real device
+// (Automatic signing). The bundle identifier is dev.uconnect.mobile; a team
+// that does not own it has to change PRODUCT_BUNDLE_IDENTIFIER as well, here:
+//
+//   PRODUCT_BUNDLE_IDENTIFIER = com.example.uconnect
+DEVELOPMENT_TEAM = ABCDE12345

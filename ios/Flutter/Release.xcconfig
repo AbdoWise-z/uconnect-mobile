@@ -1,1 +1,6 @@
 #include "Generated.xcconfig"
+// The signing team, for builds that go on a real device: each developer's
+// own, kept out of the repository. Copy Signing.xcconfig.example to
+// Signing.xcconfig and fill it in; without the file the project has no team,
+// which is all a simulator build needs.
+#include? "Signing.xcconfig"
