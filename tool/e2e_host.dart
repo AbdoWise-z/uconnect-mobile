@@ -6,6 +6,10 @@
 // device can then watch either with no real screen, camera, capture permission
 // or window involved.
 //
+// With E2E_SYNC=<dir> (or @temp) it offers that folder for folder sync to
+// every proven peer, holding from-host.txt, and serves the same folder as the
+// share "Synced" so a device can see what arrived in it.
+//
 // It also reads what a device shares: from every peer that offers a share
 // named "Phone" holding from-phone.txt, it downloads that file into its own
 // share as fetched-from-phone.txt, where the device's test finds it again.
@@ -55,6 +59,8 @@ import 'package:uconnect_mobile/core/screen/screen_host.dart';
 import 'package:uconnect_mobile/core/session.dart';
 import 'package:uconnect_mobile/core/storage/storage_client.dart';
 import 'package:uconnect_mobile/core/storage/storage_offerer.dart';
+import 'package:uconnect_mobile/core/sync/sync_client.dart';
+import 'package:uconnect_mobile/core/sync/sync_folder.dart';
 import 'package:uconnect_mobile/core/wire.dart';
 import 'package:uconnect_mobile/uconnect/uconnect.dart';
 
@@ -65,6 +71,11 @@ const streamFile = String.fromEnvironment('E2E_H264_FILE');
 const streamUrl = String.fromEnvironment('E2E_H264');
 const relayMode = int.fromEnvironment('E2E_RELAY', defaultValue: 1);
 const capture = String.fromEnvironment('E2E_CAPTURE');
+const syncOption = String.fromEnvironment('E2E_SYNC');
+
+/// The folder the host offers for sync: the same id on every member.
+const syncFolderId = 'e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0';
+const syncFolderLabel = 'E2E Sync';
 const streamSize = String.fromEnvironment('E2E_H264_SIZE', defaultValue: '640x360');
 const readyFile = String.fromEnvironment('E2E_READY_FILE');
 const stopFile = String.fromEnvironment('E2E_STOP_FILE');
@@ -231,13 +242,69 @@ Future<void> serveHost() async {
       await Directory(shareDir).create(recursive: true);
       await File('$shareDir/hello.txt').writeAsString('hello from the desk');
     }
+    var syncDir = syncOption;
+    if (syncDir == '@temp') {
+      syncDir = '${Directory.systemTemp.path}/uc-e2e-host-sync';
+    }
+    if (syncDir.isNotEmpty) {
+      final dir = Directory(syncDir);
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+      await dir.create(recursive: true);
+      await File('$syncDir/from-host.txt').writeAsString('synced from the host');
+    }
     if (shareDir.isNotEmpty) {
       await Directory(shareDir).create(recursive: true);
       StorageOfferer(session)
         ..offered = true
-        ..shares = [SharedFolder('Docs', shareDir)];
+        ..shares = [
+          SharedFolder('Docs', shareDir),
+          if (syncDir.isNotEmpty) SharedFolder('Synced', syncDir, readOnly: true),
+        ];
       client = StorageClient(session);
       services.add(Services.storage);
+    }
+    SyncClient? sync;
+    if (syncDir.isNotEmpty) {
+      // The wiring the app does in AppState._startSync, with every proven
+      // peer made a member of the one folder as it appears.
+      final members = <String, Grant>{};
+      final engine = sync = SyncClient(
+        sendControl: (dev, msg) => session.sendControl(dev, msg),
+        sendData: (dev, id, bytes) =>
+            session.sendFrame(dev, MessageKind.syncData, id, bytes),
+        peerKey: (dev) {
+          final p = session.peers[dev];
+          return p != null && p.identityState == 'verified' ? p.identityKey : null;
+        },
+        offersTo: (dev) => true,
+        connectedSince: (dev) => session.peers[dev]?.connectedAt ?? -1,
+        myKeyHex: identity.publicKeyHex,
+        stateDir: '${stateDir.path}/sync',
+        // ignore: avoid_print
+        onError: (m) => print('E2E_HOST sync worker: $m'),
+      );
+      await engine.start();
+      void offer() => engine.setFolders([
+            FolderConfig(
+                id: syncFolderId,
+                label: syncFolderLabel,
+                path: syncDir,
+                peers: {...members}),
+          ]);
+      session.addControlHandler(engine.handleControl);
+      session.setFrameHandler(MessageKind.syncData, engine.handleData);
+      session.addIdentityHandler((dev) {
+        final key = session.peers[dev]?.identityKey ?? '';
+        if (key.isNotEmpty && !members.containsKey(key)) {
+          members[key] = const Grant(receive: true, contribute: true);
+          offer();
+        }
+        engine.peerUp(dev);
+      });
+      session.addPeerStateHandler((dev, state) {
+        if (state == ucPeerClosed || state == ucPeerFailed) engine.peerGone(dev);
+      });
+      offer();
     }
     if (capture == 'screen') {
       ScreenHost(session, CaptureController(), RemoteInput(),
@@ -286,6 +353,8 @@ Future<void> serveHost() async {
       Perm.screenDirect,
       Perm.cameraView,
       Perm.cameraDirect,
+      Perm.syncOffer,
+      Perm.syncReceive,
     }));
 
     await session.start(
@@ -312,6 +381,7 @@ Future<void> serveHost() async {
     }
     // ignore: avoid_print
     print('E2E_HOST serving ended');
+    await sync?.dispose().timeout(const Duration(seconds: 5), onTimeout: () {});
     await session.dispose().timeout(const Duration(seconds: 10), onTimeout: () {
       // ignore: avoid_print
       print('E2E_HOST the session did not shut down in 10 s');
